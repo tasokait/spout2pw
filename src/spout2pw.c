@@ -60,7 +60,7 @@ struct receiver **receivers;
 size_t num_receivers = 0;
 
 struct shared_resource_open {
-    unsigned int kmt_handle;
+    uintptr_t kmt_handle;
     WCHAR name[1];
 };
 
@@ -137,7 +137,7 @@ void show_error(HRESULT res, const char *msg) {
     free(dialog_msg);
 }
 
-static HANDLE open_shared_resource(HANDLE kmt_handle) {
+static HANDLE open_shared_resource(uintptr_t kmt_handle) {
     struct shared_resource_open inbuff;
 
     HANDLE shared_resource = CreateFileW(L"\\\\.\\SharedGpuResource",GENERIC_READ | GENERIC_WRITE,0,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
@@ -146,13 +146,13 @@ static HANDLE open_shared_resource(HANDLE kmt_handle) {
         ERR("Failed to open SharedGpuResource device (error %lu)\n", GetLastError());
         return INVALID_HANDLE_VALUE;
     }
-    inbuff.kmt_handle = wine_server_obj_handle(kmt_handle);
+    inbuff.kmt_handle = wine_server_obj_handle((HANDLE)kmt_handle);
     BOOL success = DeviceIoControl(shared_resource,IOCTL_SHARED_GPU_RESOURCE_OPEN,&inbuff, sizeof(inbuff),NULL, 0,NULL,NULL);
 
     if (!success) {
         ERR("DeviceIoControl(IOCTL_SHARED_GPU_RESOURCE_OPEN) failed (error %lu)\n", GetLastError());
-        ERR("kmt_handle raw value: 0x%lx\n", (long)(intptr_t)kmt_handle);
-        ERR("inbuff.kmt_handle: 0x%lx\n", (long)(intptr_t)inbuff.kmt_handle);
+        ERR("kmt_handle raw value: 0x%x\n", kmt_handle);
+        ERR("inbuff.kmt_handle: 0x%x\n", inbuff.kmt_handle);
         ERR("sizeof(inbuff): %zu\n", sizeof(inbuff));
         CloseHandle(shared_resource);
         return INVALID_HANDLE_VALUE;
@@ -247,9 +247,9 @@ static struct source_info get_receiver_info(struct receiver *receiver) {
         return ret;
     }
 
-    HANDLE share_handle = info.shareHandle;
+    uintptr_t share_handle = info.shareHandle;
 
-    TRACE("Sender %s: %dx%d fmt=%d handle=0x%lx usage=0x%x changed=%d\n", receiver->name, info.width, info.height, info.format, (long)(intptr_t)info.shareHandle, info.usage, info.changed);
+    TRACE("Sender %s: %dx%d fmt=%d handle=0x%lx usage=0x%x changed=%d\n", receiver->name, info.width, info.height, info.format, info.shareHandle, info.usage, info.changed);
 
     ret.width = info.width;
     ret.height = info.height;
@@ -271,13 +271,12 @@ static struct source_info get_receiver_info(struct receiver *receiver) {
         return ret;
     }
 
-    TRACE("Share handle opened: 0x%lx -> 0x%lx\n", HandleToLong(share_handle),
-          HandleToLong(memhandle));
+    TRACE("Share handle opened: 0x%lx -> 0x%lx\n", share_handle, HandleToLong(memhandle));
 
     Sleep(50);
 
     if (!SpoutDXToCGetSenderInfo(spout, &info) || info.shareHandle != share_handle) {
-        WARN("Texture changed out under us, trying again later (0x%lx -> 0x%lx)\n",HandleToLong(share_handle), HandleToLong(info.shareHandle));
+        WARN("Texture changed out under us, trying again later (0x%lx -> 0x%lx)\n",share_handle, info.shareHandle);
         ret.flags |= RECEIVER_TEXTURE_INVALID;
         NtClose(memhandle);
         return ret;
