@@ -1,4 +1,3 @@
-#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -7,15 +6,14 @@
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <unistd.h>
-
+#include <sys/un.h>
 #include <funnel-vk.h>
 #include <funnel.h>
 
 #include "spout2pw_unix.h"
-#include "wine/debug.h"
+#include <vulkan/vulkan_core.h>
+#include "wine/server.h"
 #include <ntstatus.h>
-
-WINE_DEFAULT_DEBUG_CHANNEL(spout2pw);
 
 #define API_VERSION VK_API_VERSION_1_0
 // #define HAVE_VK_1_1
@@ -38,9 +36,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(spout2pw);
 #define D3D11_BIND_SHADER_RESOURCE 0x8
 #define D3D11_BIND_RENDER_TARGET 0x20
 #define D3D11_BIND_UNORDERED_ACCESS 0x80
-
-#include <vulkan/vulkan.h>
-#include <vulkan/vulkan_core.h>
+#define SOCKET_PATH "/tmp/spout2pw_share.sock"
 
 #define CHECK_VK_RESULT(_expr)                                                 \
     result = _expr;                                                            \
@@ -69,7 +65,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(spout2pw);
 
 static struct startup_params startup_params = {0};
 struct funnel_ctx *funnel;
-
+char *wine10;
+int server_started = -1;
 struct source {
     void *receiver;
     struct funnel_stream *stream;
@@ -1188,6 +1185,121 @@ static NTSTATUS update_source(void *args) {
 
     return STATUS_SUCCESS;
 }
+static inline void server_log(int dummy,...){
+    va_list arg;
+    char _buf[512];
+    va_start(arg, dummy);
+    int _len = vsnprintf(_buf, sizeof(_buf), "[spout2pw:%s]: %s", arg);
+    va_end(arg);
+    if (_len > 0) {
+        write(2, _buf, _len);
+        fsync(2);
+    }
+}
+void *server_start(void* arg){
+    //so basically what we are doing here is to create a socket for passing fd and use server_started as a flag to the main thread, so the when this thread is ready to listen, the main thread uses the new custom request from wineserver, so wineserver gets connected to the socket, and passes the fd through the socket, it is hacky, complicated and annoying but it works.
+
+    //TRACES and ERRS and WARNS causes the thread to hang for whatever reason. so moving on to a lower level of printing.
+    //TRACE("socket server thread got started\n");
+    server_log(0,"trace", "socket server thread got started\n");
+    struct sockaddr_un addr;
+    int server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (server_fd == -1) {
+        server_log(0,"err", "couldn't open listening socket\n");
+        //ERR("couldn't open listening socket\n");
+        return NULL;
+    }
+    unlink(SOCKET_PATH);
+    memset(&addr, 0, sizeof(struct sockaddr_un));
+    server_log(0,"trace", "server fd got prepared\n");
+    //TRACE("server fd got prepared\n");
+    addr.sun_family = AF_UNIX;
+    size_t src_len = strlen(SOCKET_PATH);
+    size_t max_copy = sizeof(addr.sun_path) - 1;
+    size_t copy_len = (src_len < max_copy) ? src_len : max_copy;
+    memcpy(addr.sun_path,SOCKET_PATH,copy_len);
+    addr.sun_path[copy_len] = '\0';
+    server_log(0,"trace", "server path got prepared\n");
+    //TRACE("server path got prepared\n");
+
+    struct msghdr msg = {0};
+    struct iovec iov[1];
+    struct cmsghdr *cmsg = NULL;
+    char ctrl_buf[CMSG_SPACE(sizeof(int))];
+    char data[1];
+    iov[0].iov_base = data;
+    iov[0].iov_len = sizeof(data);
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = ctrl_buf;
+    msg.msg_controllen = CMSG_SPACE(sizeof(int));
+    server_log(0,"trace", "message control got prepared\n");
+    //TRACE("message control got prepared\n");
+
+    if (bind(server_fd, (struct sockaddr *)&addr, sizeof(struct sockaddr_un)) == -1) return NULL;
+    if (listen(server_fd, 5) == -1) return NULL;
+    server_log(0,"trace", "Waiting for connection from wineserver...\n");
+    //TRACE("Waiting for connection from wineserver...\n");
+    server_started = server_fd;
+    int connected_fd = accept(server_fd, NULL, NULL);
+    if (connected_fd == -1) return NULL;
+    server_log(0,"trace", "Connected for passing the fd\n");
+    //TRACE("Connected for passing the fd\n");
+
+    if (recvmsg(connected_fd, &msg, 0) < 0) {
+        server_log(0,"err", "recvmsg failed\n");
+        //ERR("recvmsg failed\n");
+        close(connected_fd);
+        return NULL;
+    }
+    int received_fd = -1;
+    cmsg = CMSG_FIRSTHDR(&msg);
+    if (cmsg != NULL && cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
+        received_fd = *((int *) CMSG_DATA(cmsg));
+        server_log(0,"trace", "Successfully received Vulkan FD: %d\n", received_fd);
+        //TRACE("Successfully received Vulkan FD: %d\n", received_fd);
+    }
+    close(connected_fd);
+    server_started = received_fd;
+    return NULL;
+}
+
+static NTSTATUS recieve_fd(void *args){
+    //an absolute horrible hack to get the FD on this side.
+    struct fdcheck *fdback = args;
+    pthread_t thread_id;
+    NTSTATUS status;
+    int threadstat = pthread_create(&thread_id, NULL, server_start, NULL);
+    if(threadstat){
+        ERR("Could not start socket server thread, %d\n", threadstat);
+        return STATUS_FATAL_APP_EXIT;
+    }
+    pthread_detach(thread_id);
+    while(server_started == -1){
+        TRACE("server socket is not started yet, waiting for server socket to get started...\n");
+    }
+    int server_trace = server_started;
+    TRACE("server socket signaled it is waiting, making the wine request for fd passing...\n");
+    SERVER_START_REQ(D3DKMT_EXTRACT_FD) {
+        req->handle = fdback->kmt_handle;
+        req->path_size = strlen(SOCKET_PATH);
+        wine_server_add_data( req, SOCKET_PATH, strlen(SOCKET_PATH) );
+
+        status = wine_server_call(req);
+    }
+    SERVER_END_REQ;
+    if(status != STATUS_SUCCESS){
+        ERR("Somewhere in socket communication, something gone wrong.\n");
+        return status;
+    }
+    while(server_started == server_trace){
+        TRACE("Wating for socket server to parse the recieved message...\n");
+    }
+    TRACE("socket server parsed the fd\n");
+    fdback->fd = server_started;
+    server_started = -1;
+    return STATUS_SUCCESS;
+}
 
 static NTSTATUS destroy_source(void *args) {
     struct source *source = args;
@@ -1224,22 +1336,34 @@ static NTSTATUS _teardown(void *args) {
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS _getenv(void *args) {
-    struct getenv_params *params = args;
-    params->val = getenv(params->var);
-
-    return STATUS_SUCCESS;
+__attribute__((constructor)) static void initenv(){
+    wine10 = getenv("SPOUT2PW_WINE10");
 }
 
+static NTSTATUS _getenv(void *args) {
+
+    //we are already getting the needed envs from initenv, there is no point in evaluating envs again, just assign a switch value to each and switch between values based on the requested env switch value.
+    struct getenv_params *params = args;
+    WINE_TRACE("Env triggered by PE side with value of %i\n",params->var);
+    switch(params->var){
+        case 10:
+            params->val = wine10;
+            break;
+        default:
+            params->val = 0;
+            return STATUS_INVALID_PARAMETER;
+    }
+    return STATUS_SUCCESS;
+}
 const unixlib_entry_t __wine_unix_call_funcs[] = {
     _getenv,    startup,       _teardown,      create_source,
-    run_source, update_source, destroy_source,
+    run_source, update_source, destroy_source, recieve_fd,
 };
 
 C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count);
 
 const unixlib_entry_t __wine_unix_call_wow64_funcs[] = {
     _getenv,    startup,       _teardown,      create_source,
-    run_source, update_source, destroy_source,
+    run_source, update_source, destroy_source, recieve_fd,
 };
 C_ASSERT(ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_funcs_count);

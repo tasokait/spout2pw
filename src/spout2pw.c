@@ -1,33 +1,28 @@
 #define _POSIX_C_SOURCE 200809L
-
-#include <assert.h>
-#include <math.h>
-#include <stdio.h>
+//#include <math.h>
+//#include <stdio.h>
 #include <string.h>
 #include <wchar.h>
 
 #include "spout2pw_unix.h"
 
-#include <winbase.h>
-#include <windef.h>
-#include <winnt.h>
+//#include <windef.h>
+//#include <winnt.h>
+//#include <winbase.h>
 #include <winsvc.h>
-#include <winuser.h>
+//#include <winuser.h>
 
 #include <winioctl.h>
 
-#include "wine/debug.h"
 #include "wine/server.h"
 
 #include <spoutdxtoc.h>
-
-WINE_DEFAULT_DEBUG_CHANNEL(spout2pw);
-
+extern int CDECL wine_server_receive_fd( obj_handle_t *handle );
 static WCHAR spout2pwW[] = L"Spout2Pw";
 static HANDLE exit_event;
 static SERVICE_STATUS_HANDLE service_handle;
 static SERVICE_STATUS service_status;
-
+static int vkchangexpect = 0;
 static HANDLE sendernames_thread_handle = 0;
 static SPOUTDXTOC_SENDERNAMES *spout_names = NULL;
 
@@ -67,13 +62,6 @@ struct shared_resource_open {
 struct shared_resource_info {
     UINT64 resource_size;
 };
-
-typedef enum D3D11_TEXTURE_LAYOUT {
-    D3D11_TEXTURE_LAYOUT_UNDEFINED = 0,
-    D3D11_TEXTURE_LAYOUT_ROW_MAJOR = 1,
-    D3D11_TEXTURE_LAYOUT_64K_STANDARD_SWIZZLE = 2
-} D3D11_TEXTURE_LAYOUT;
-
 struct DxvkSharedTextureMetadata {
     UINT Width;
     UINT Height;
@@ -93,7 +81,7 @@ static inline void init_unicode_string(UNICODE_STRING *str, const WCHAR *data) {
     str->MaximumLength = str->Length + sizeof(WCHAR);
     str->Buffer = (WCHAR *)data;
 }
-
+static struct source_info (*get_receiver_info) (struct receiver *receiver);
 void show_error(HRESULT res, const char *msg) {
     if (!msg) {
         switch (res) {
@@ -135,6 +123,33 @@ void show_error(HRESULT res, const char *msg) {
     TRACE("Message box returned\n");
 
     free(dialog_msg);
+}
+
+static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type_filter, VkMemoryPropertyFlags properties) {
+    VkPhysicalDeviceMemoryProperties mem_properties;
+    vkGetPhysicalDeviceMemoryProperties(physical_device, &mem_properties);
+
+    for (uint32_t i = 0; i < mem_properties.memoryTypeCount; i++) {
+        if ((type_filter & (1 << i)) && (mem_properties.memoryTypes[i].propertyFlags & properties) == properties) {
+            return i;
+        }
+    }
+    return 0xFFFFFFFF;
+}
+
+
+static int kmtovk(uintptr_t kmt_handle, D3D11_TEXTURE2D_DESC1 metadata,SPOUTDXTOC_RECEIVER *spout){
+    NTSTATUS status;
+    int fd = -1;
+    struct fdcheck gettingfd;
+    gettingfd.kmt_handle = kmt_handle;
+    status = UNIX_CALL(recieve_fd, &gettingfd);
+    fd = gettingfd.fd;
+    if(status != STATUS_SUCCESS){
+        ERR("%x\n",status);
+    }
+    vkchangexpect = 1;
+    return fd;
 }
 
 static HANDLE open_shared_resource(uintptr_t kmt_handle) {
@@ -227,8 +242,7 @@ static DWORD WINAPI receiver_thread(void *arg) {
 
     return STATUS_SUCCESS;
 }
-
-static struct source_info get_receiver_info(struct receiver *receiver) {
+static struct source_info get_receiver_info_kmt (struct receiver *receiver) {
     SPOUTDXTOC_RECEIVER *spout = receiver->spout;
     SPOUTDXTOC_SENDERINFO info;
     struct source_info ret = {.opaque_fd = -1};
@@ -241,7 +255,7 @@ static struct source_info get_receiver_info(struct receiver *receiver) {
         return ret;
     }
 
-    if (!SpoutDXToCGetSenderInfo(spout, &info)) {
+    if (!SpoutDXToCGetSenderInfo(spout, &info,&vkchangexpect)) {
         ret.flags = RECEIVER_DISCONNECTED;
         TRACE("-> Failed to get sender info (disconnected?)\n");
         return ret;
@@ -264,6 +278,13 @@ static struct source_info get_receiver_info(struct receiver *receiver) {
     int fd;
     NTSTATUS status;
     obj_handle_t unix_resource;
+    D3D11_TEXTURE2D_DESC1 dxmetadata;
+
+    if(!SpoutDXToCGetSenderInfo(spout, &info,&vkchangexpect) || SpoutDXToCGetMetaData(spout, &dxmetadata)){
+        WARN("couldn't get metadata\n");
+        return ret;
+    }
+
     HANDLE memhandle = open_shared_resource(info.shareHandle);
     if (memhandle == INVALID_HANDLE_VALUE) {
         ret.flags |= RECEIVER_TEXTURE_INVALID;
@@ -275,7 +296,7 @@ static struct source_info get_receiver_info(struct receiver *receiver) {
 
     Sleep(50);
 
-    if (!SpoutDXToCGetSenderInfo(spout, &info) || info.shareHandle != share_handle) {
+    if (info.shareHandle != share_handle || info.width != dxmetadata.Width || info.height != dxmetadata.Height || info.format != dxmetadata.Format || info.usage != dxmetadata.Usage) {
         WARN("Texture changed out under us, trying again later (0x%lx -> 0x%lx)\n",share_handle, info.shareHandle);
         ret.flags |= RECEIVER_TEXTURE_INVALID;
         NtClose(memhandle);
@@ -355,6 +376,85 @@ no_resource_size:
     NtClose(wine_server_ptr_handle(unix_resource));
     NtClose(memhandle);
     if (status != STATUS_SUCCESS) {
+        ret.flags |= RECEIVER_TEXTURE_INVALID;
+        TRACE("-> failed to convert handle to fd\n");
+        return ret;
+    }
+
+    TRACE("New texture OPAQUE fd: %d\n", fd);
+
+    ret.opaque_fd = fd;
+    ret.flags |= RECEIVER_TEXTURE_UPDATED;
+    receiver->force_update = false;
+
+    return ret;
+}
+
+static struct source_info get_receiver_info_vk (struct receiver *receiver) {
+    SPOUTDXTOC_RECEIVER *spout = receiver->spout;
+    SPOUTDXTOC_SENDERINFO info;
+    struct source_info ret = {.opaque_fd = -1};
+
+    TRACE("Updating receiver %p -> %p (%s)\n", receiver, spout, receiver->name);
+
+    if (!SpoutDXToCIsConnected(spout)) {
+        ret.flags = RECEIVER_DISCONNECTED;
+        TRACE("-> Not connected\n");
+        return ret;
+    }
+
+    if (!SpoutDXToCGetSenderInfo(spout, &info, &vkchangexpect)) {
+        ret.flags = RECEIVER_DISCONNECTED;
+        TRACE("-> Failed to get sender info (disconnected?)\n");
+        return ret;
+    }
+
+    uintptr_t share_handle = info.shareHandle;
+
+    TRACE("Sender %s: %dx%d fmt=%d handle=0x%lx usage=0x%x changed=%d\n", receiver->name, info.width, info.height, info.format, info.shareHandle, info.usage, info.changed);
+
+    ret.width = info.width;
+    ret.height = info.height;
+    ret.format = info.format;
+    ret.usage = info.usage;
+
+    if (!info.changed && !receiver->force_update){
+        vkchangexpect = 0;
+        return ret;
+    }
+
+    receiver->force_update = true;
+
+    D3D11_TEXTURE2D_DESC1 dxmetadata = {0};
+
+    if(!SpoutDXToCGetSenderInfo(spout, &info, &vkchangexpect) || SpoutDXToCGetMetaData(spout, &dxmetadata)){
+        WARN("couldn't get metadata\n");
+        return ret;
+    }
+
+    ret.width = dxmetadata.Width;
+    ret.height = dxmetadata.Height;
+    ret.format = dxmetadata.Format;
+    ret.bind_flags = dxmetadata.BindFlags;
+
+    TRACE("DX texture metadata:\n");
+    TRACE("Width          = %d\n", dxmetadata.Width);
+    TRACE("Height         = %d\n", dxmetadata.Height);
+    TRACE("MipLevels      = %d\n", dxmetadata.MipLevels);
+    TRACE("ArraySize      = %d\n", dxmetadata.ArraySize);
+    TRACE("Format         = %d\n", dxmetadata.Format);
+    TRACE("SampleDesc     = %d, %d\n", dxmetadata.SampleDesc.Count, dxmetadata.SampleDesc.Quality);
+    TRACE("Usage          = %d\n", dxmetadata.Usage);
+    TRACE("BindFlags      = 0x%x\n", dxmetadata.BindFlags);
+    TRACE("CPUAccessFlags = 0x%x\n", dxmetadata.CPUAccessFlags);
+    TRACE("MiscFlags      = 0x%x\n", dxmetadata.MiscFlags);
+    TRACE("TextureLayout  = %d\n", dxmetadata.TextureLayout);
+
+    int fd = kmtovk(info.shareHandle, dxmetadata, spout);
+    struct fdcheck checkvalid;
+    checkvalid.fd = fd;
+
+    if(fd == -1){
         ret.flags |= RECEIVER_TEXTURE_INVALID;
         TRACE("-> failed to convert handle to fd\n");
         return ret;
@@ -530,14 +630,13 @@ static DWORD WINAPI service_handler(DWORD ctrl, DWORD event_type, LPVOID event_d
     }
 }
 
-// Future use
-__attribute__((unused)) static const char *_getenv(const char *var) {
+static const char *PE_getenv(int var) {
     NTSTATUS ret;
     struct getenv_params params = {.var = var};
 
     ret = UNIX_CALL(getenv, &params);
     if (ret != STATUS_SUCCESS) {
-        TRACE("unix_getenv(%s) failed (0x%lx)\n", var, ret);
+        TRACE("unix_getenv(%i) failed (0x%lx)\n", var, ret);
         return NULL;
     }
 
@@ -572,7 +671,13 @@ static void WINAPI ServiceMain(DWORD argc, LPWSTR *argv) {
     TRACE("Initializing spoutdxtoc.dll\n");
 
 restart:
-
+    const char* wine10 = PE_getenv(10);
+    if(wine10 && strcasecmp(wine10, "1") == 0){
+        TRACE("Setting wine10 backwards compatibility on PE\n");
+        get_receiver_info = get_receiver_info_kmt;
+    }else{
+        get_receiver_info = get_receiver_info_vk;
+    }
     // NOTE: There is no point continuing if it is.
     spout_names = SpoutDXToCNewSenderNames();
     if (spout_names == NULL) {

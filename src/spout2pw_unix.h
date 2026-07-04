@@ -1,5 +1,5 @@
 #include <stdint.h>
-
+#include <assert.h>
 #define __WINESRC__
 
 #include <ntstatus.h>
@@ -13,9 +13,9 @@
 #include <ntuser.h>
 
 #include "wine/unixlib.h"
+#include "wine/debug.h"
+#include <vulkan/vulkan.h>
 
-// Wine 9.0 build compat (Build only! This will not work with wine 9.0 at
-// runtime!)
 #ifndef ALL_USER32_CALLBACKS
 #define NtUserCallDispatchCallback 0
 
@@ -47,6 +47,8 @@ struct receiver_params {
 #define RECEIVER_TEXTURE_UPDATED (1 << 1)
 #define RECEIVER_TEXTURE_INVALID (1 << 2)
 
+WINE_DEFAULT_DEBUG_CHANNEL(spout2pw);
+
 struct source_info {
     uint64_t resource_size;
     uint32_t flags;
@@ -56,9 +58,15 @@ struct source_info {
     uint32_t usage;
     uint32_t bind_flags;
     int32_t opaque_fd;
+    uintptr_t kmt_handle;
 };
 
 #define FRAME_IS_NEW (1 << 0)
+
+struct fdcheck{
+    uintptr_t kmt_handle;
+    int fd;
+};
 
 struct lock_texture_return {
     struct dispatch_callback_params dispatch;
@@ -89,7 +97,7 @@ struct update_source_params {
 };
 
 struct getenv_params {
-    const char *var;
+    int var;
     const char *val;
 };
 
@@ -101,6 +109,7 @@ enum spout2pw_funcs {
     unix_run_source,
     unix_update_source,
     unix_destroy_source,
+    unix_recieve_fd,
     unix_funcs_count
 };
 

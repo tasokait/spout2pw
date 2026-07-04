@@ -396,7 +396,7 @@ prepare_prefix() {
 
 prepare_proton() {
     if ! grep -q 'WINEDLLPATH.*in os.environ' "$protonpath/proton"; then
-        fatal "This Proton version is too old to work with Spout2PW.\n\nSpout2PW requires a recent Proton 10."
+        fatal "This Proton version is too old to work with Spout2PW.\n\nSpout2PW requires a recent Proton 10 or Proton 11 build from here: \033]8;;URL\033\\https://github.com/tasokait/proton-ge-spout2pw-fixes\033]8;;\033\\"
     fi
 
     version="$(grep "^;; Version:" "$protonpath/files/share/wine/wine.inf" | cut -d: -f2 | sed -e 's/^ *//' -e 's/ *$//')"
@@ -406,6 +406,9 @@ prepare_proton() {
     case "$version" in
         "Wine 10."*)
         ;;
+        "Wine 11."*)
+            fatal "Support for Proton 11 for now is available via this Proton build: \033]8;;URL\033\\https://github.com/tasokait/proton-ge-spout2pw-fixes\033]8;;\033\\"
+        ;;
         *)
             fatal "Unsupported Wine/Proton version: $version.\n\nSpout2PW currently requires Proton 10."
         ;;
@@ -414,6 +417,7 @@ prepare_proton() {
 }
 
 setup_env() {
+    export SPOUT2PW_WINE10=1
     export WINEDLLPATH="$spout2pw/spout2pw-dlls"
     if [ "$enable_debug" = 1 ]; then
         export PROTON_LOG=+spout2pw
