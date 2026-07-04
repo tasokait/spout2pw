@@ -11,4 +11,4 @@
 	url = https://github.com/leadedge/Spout2
 [submodule "subprojects/spoutdxtoc"]
 	path = subprojects/spoutdxtoc
-	url = https://codeberg.org/tytan652/spoutdxtoc.git
+	url = https://github.com/tasokait/spoutdxtoc.git
