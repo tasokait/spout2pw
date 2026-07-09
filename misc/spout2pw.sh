@@ -407,10 +407,10 @@ prepare_proton() {
         "Wine 10."*)
         ;;
         "Wine 11."*)
-            fatal "Support for Proton 11 for now is available via this Proton build: \033]8;;URL\033\\https://github.com/tasokait/proton-ge-spout2pw-fixes\033]8;;\033\\"
+            show_info "Support for Proton 11 for now is not complete yet, your proton build may not be supported, you can see the builds of proton 11 on this link: \033]8;;URL\033\\https://github.com/tasokait/spout2pw/releases/tag/0.2.7\033]8;;\033\\"
         ;;
         *)
-            fatal "Unsupported Wine/Proton version: $version.\n\nSpout2PW currently requires Proton 10."
+            fatal "Unsupported Wine/Proton version: $version.\n\nSpout2PW currently requires Proton 10/11."
         ;;
     esac
 

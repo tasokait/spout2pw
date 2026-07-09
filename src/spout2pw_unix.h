@@ -63,11 +63,6 @@ struct source_info {
 
 #define FRAME_IS_NEW (1 << 0)
 
-struct fdcheck{
-    uintptr_t kmt_handle;
-    int fd;
-};
-
 struct lock_texture_return {
     struct dispatch_callback_params dispatch;
     int32_t retval;
@@ -109,7 +104,6 @@ enum spout2pw_funcs {
     unix_run_source,
     unix_update_source,
     unix_destroy_source,
-    unix_recieve_fd,
     unix_funcs_count
 };
 

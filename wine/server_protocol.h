@@ -6285,19 +6285,6 @@ struct fsync_free_shm_idx_reply
     struct reply_header __header;
 };
 
-struct D3DKMT_EXTRACT_FD_request
-{
-    struct request_header __header;
-    d3dkmt_handle_t handle;
-    data_size_t path_size;
-    /* VARARG(socket_path,string); */
-    char __pad_20[4];
-};
-struct D3DKMT_EXTRACT_FD_reply
-{
-    struct reply_header __header;
-};
-
 
 enum request
 {
@@ -6613,7 +6600,6 @@ enum request
     REQ_d3dkmt_mutex_acquire,
     REQ_d3dkmt_mutex_release,
     REQ_fsync_free_shm_idx,
-    REQ_D3DKMT_EXTRACT_FD,
     REQ_NB_REQUESTS
 };
 
@@ -6933,7 +6919,6 @@ union generic_request
     struct d3dkmt_mutex_acquire_request d3dkmt_mutex_acquire_request;
     struct d3dkmt_mutex_release_request d3dkmt_mutex_release_request;
     struct fsync_free_shm_idx_request fsync_free_shm_idx_request;
-    struct D3DKMT_EXTRACT_FD_request D3DKMT_EXTRACT_FD_request;
 };
 union generic_reply
 {
@@ -7251,9 +7236,8 @@ union generic_reply
     struct d3dkmt_mutex_acquire_reply d3dkmt_mutex_acquire_reply;
     struct d3dkmt_mutex_release_reply d3dkmt_mutex_release_reply;
     struct fsync_free_shm_idx_reply fsync_free_shm_idx_reply;
-    struct D3DKMT_EXTRACT_FD_reply D3DKMT_EXTRACT_FD_reply;
 };
 
-#define SERVER_PROTOCOL_VERSION 937
+#define SERVER_PROTOCOL_VERSION 931
 
 #endif /* __WINE_WINE_SERVER_PROTOCOL_H */

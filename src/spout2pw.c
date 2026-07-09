@@ -1,17 +1,10 @@
 #define _POSIX_C_SOURCE 200809L
-//#include <math.h>
-//#include <stdio.h>
 #include <string.h>
 #include <wchar.h>
 
 #include "spout2pw_unix.h"
 
-//#include <windef.h>
-//#include <winnt.h>
-//#include <winbase.h>
 #include <winsvc.h>
-//#include <winuser.h>
-
 #include <winioctl.h>
 
 #include "wine/server.h"
@@ -141,12 +134,25 @@ static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type
 static int kmtovk(uintptr_t kmt_handle, D3D11_TEXTURE2D_DESC1 metadata,SPOUTDXTOC_RECEIVER *spout){
     NTSTATUS status;
     int fd = -1;
-    struct fdcheck gettingfd;
-    gettingfd.kmt_handle = kmt_handle;
-    status = UNIX_CALL(recieve_fd, &gettingfd);
-    fd = gettingfd.fd;
+    obj_handle_t fdhandle;
+    SERVER_START_REQ(d3dkmt_object_open) {
+        req->type = D3DKMT_RESOURCE;
+        req->global = (d3dkmt_handle_t)kmt_handle;
+        status = wine_server_call(req);
+        fdhandle = reply->handle;
+    }
+    SERVER_END_REQ;
     if(status != STATUS_SUCCESS){
-        ERR("%x\n",status);
+        ERR("Couldn't get the fd handle: %d\n",status);
+        return fd;
+    }
+    
+    HANDLE testhandle = wine_server_ptr_handle(fdhandle);
+    TRACE("handle is %lx\n",testhandle);
+    status = wine_server_handle_to_fd(testhandle ,GENERIC_ALL, &fd, NULL);
+    if(status != STATUS_SUCCESS){
+        ERR("Couldn't get the fd: %d\n", status);
+        return fd;
     }
     vkchangexpect = 1;
     return fd;
@@ -451,8 +457,6 @@ static struct source_info get_receiver_info_vk (struct receiver *receiver) {
     TRACE("TextureLayout  = %d\n", dxmetadata.TextureLayout);
 
     int fd = kmtovk(info.shareHandle, dxmetadata, spout);
-    struct fdcheck checkvalid;
-    checkvalid.fd = fd;
 
     if(fd == -1){
         ret.flags |= RECEIVER_TEXTURE_INVALID;
