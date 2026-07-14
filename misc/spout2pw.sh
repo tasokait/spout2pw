@@ -417,7 +417,13 @@ prepare_proton() {
 }
 
 setup_env() {
-    export SPOUT2PW_WINE10=1
+    case "$version" in
+        "Wine 10."*)
+        export SPOUT2PW_WINE10=1
+    ;;
+    *)
+    ;;
+    esac
     export WINEDLLPATH="$spout2pw/spout2pw-dlls"
     if [ "$enable_debug" = 1 ]; then
         export PROTON_LOG=+spout2pw
