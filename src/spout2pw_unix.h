@@ -70,9 +70,26 @@ struct lock_texture_return {
     uint64_t frame_count;
 };
 
+struct pw_consumer_shared{
+    void *spout_sender;
+    char* name;
+    uint64_t modifier;
+    uint32_t width;
+    uint32_t height;
+    int32_t stride;
+    uint32_t offset;
+    int pwfd; //owned by pipewire
+    int vkfd; //owned by vulkan
+    int ownfd; //owned by us for doing whatever we want with the fd, if needed.
+    int dxfd; //owned by directx first, but it gonna disolve into vulkan after the function that set it returns
+    uintptr_t handle;
+};
+
 struct startup_params {
     UINT64 lock_texture;
     UINT64 unlock_texture;
+    UINT64 create_spout_sender;
+    UINT64 destroy_spout_sender;
     char *error_msg;
 };
 
@@ -104,6 +121,7 @@ enum spout2pw_funcs {
     unix_run_source,
     unix_update_source,
     unix_destroy_source,
+    unix_initpw,
     unix_funcs_count
 };
 

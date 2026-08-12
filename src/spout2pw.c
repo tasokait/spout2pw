@@ -11,6 +11,7 @@
 
 #include <spoutdxtoc.h>
 extern int CDECL wine_server_receive_fd( obj_handle_t *handle );
+
 static WCHAR spout2pwW[] = L"Spout2Pw";
 static HANDLE exit_event;
 static SERVICE_STATUS_HANDLE service_handle;
@@ -18,6 +19,7 @@ static SERVICE_STATUS service_status;
 static int vkchangexpect = 0;
 static HANDLE sendernames_thread_handle = 0;
 static SPOUTDXTOC_SENDERNAMES *spout_names = NULL;
+SPOUTDXTOC_NAMELIST list = {0};
 
 static DWORD WINAPI sendernames_thread(void *arg);
 
@@ -34,6 +36,9 @@ static bool do_restart = false;
 
 #define IOCTL_SHARED_GPU_RESOURCE_GET_INFO                                     \
     CTL_CODE(FILE_DEVICE_VIDEO, 7, METHOD_BUFFERED, FILE_READ_ACCESS)
+
+#define IOCTL_SHARED_GPU_RESOURCE_GETKMT                                       \
+    CTL_CODE(FILE_DEVICE_VIDEO, 2, METHOD_BUFFERED, FILE_READ_ACCESS)
 
 struct receiver {
     char *name;
@@ -131,7 +136,7 @@ static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type
 }
 
 
-static int kmtovk(uintptr_t kmt_handle, D3D11_TEXTURE2D_DESC1 metadata,SPOUTDXTOC_RECEIVER *spout){
+static int kmtovk(uintptr_t kmt_handle){
     NTSTATUS status;
     int fd = -1;
     obj_handle_t fdhandle;
@@ -148,13 +153,14 @@ static int kmtovk(uintptr_t kmt_handle, D3D11_TEXTURE2D_DESC1 metadata,SPOUTDXTO
     }
     
     HANDLE testhandle = wine_server_ptr_handle(fdhandle);
-    TRACE("handle is %lx\n",testhandle);
     status = wine_server_handle_to_fd(testhandle ,GENERIC_ALL, &fd, NULL);
+    NtClose(testhandle);
     if(status != STATUS_SUCCESS){
         ERR("Couldn't get the fd: %d\n", status);
         return fd;
     }
-    vkchangexpect = 1;
+    vkchangexpect = num_receivers;
+    TRACE("handle is %lx, with number of Receivers of: %d and expecting changes with the amount of: %d\n",testhandle, num_receivers, vkchangexpect);
     return fd;
 }
 
@@ -232,7 +238,63 @@ static NTSTATUS WINAPI unlock_texture(void *args, ULONG size) {
 
     return NtCallbackReturn(NULL, 0, STATUS_SUCCESS);
 }
-
+static NTSTATUS WINAPI kmt_create_spout_sender(void *args, ULONG size){
+    struct receiver_params *params = args;
+    struct pw_consumer_shared *consumer = params->receiver;
+    //preventing a race condition where the sender names are being updated and the thread needs to loop, so before sender names being updated, it detects a new sender name and registers itself
+    if(sendernames_thread_handle)
+        SuspendThread(sendernames_thread_handle);
+    consumer->spout_sender = SpoutDXToCAddSender(consumer->name, consumer->width, consumer->height, DXGI_FORMAT_B8G8R8A8_UNORM, spout_names, &(consumer->handle));
+    if(sendernames_thread_handle)
+        ResumeThread(sendernames_thread_handle);
+    HANDLE memhandle = open_shared_resource(consumer->handle);
+    obj_handle_t unix_resource;
+    DeviceIoControl(memhandle,IOCTL_SHARED_GPU_RESOURCE_GET_UNIX_RESOURCE,NULL, 0, &unix_resource, sizeof(unix_resource),NULL,NULL);
+    wine_server_handle_to_fd(wine_server_ptr_handle(unix_resource),GENERIC_ALL, &consumer->dxfd, NULL);
+    NtClose(wine_server_ptr_handle(unix_resource));
+    NtClose(memhandle);
+    return STATUS_SUCCESS;
+}
+static NTSTATUS WINAPI vk_create_spout_sender(void *args, ULONG size){
+    struct receiver_params *params = args;
+    struct pw_consumer_shared *consumer = params->receiver;
+    //preventing a race condition where the sender names are being updated and the thread needs to loop, so before sender names being updated, it detects a new sender name and registers itself
+    if(sendernames_thread_handle)
+        SuspendThread(sendernames_thread_handle);
+    consumer->spout_sender = SpoutDXToCAddSender(consumer->name, consumer->width, consumer->height, DXGI_FORMAT_B8G8R8A8_UNORM, spout_names, &(consumer->handle));
+    SPOUTDXTOC_NAMELIST new_list = {0};
+    SPOUTDXTOC_NAMELIST added = {0};
+    SPOUTDXTOC_NAMELIST removed = {0};
+    SpoutDXToCGetSenderList(spout_names, &list, &new_list, &added, &removed);
+    SpoutDXToCNamelistClear(&list);
+    SpoutDXToCNamelistClear(&added);
+    SpoutDXToCNamelistClear(&removed);
+    list = new_list;
+    if(sendernames_thread_handle)
+        ResumeThread(sendernames_thread_handle);
+    consumer->dxfd = kmtovk(consumer->handle);
+    return STATUS_SUCCESS;
+}
+static NTSTATUS WINAPI destroy_spout_sender(void *args, ULONG size){
+    struct receiver_params *params = args;
+    struct pw_consumer_shared *consumer = params->receiver;
+    if(sendernames_thread_handle)
+        SuspendThread(sendernames_thread_handle);
+    //preventing a race condition where the sender names are being updated and the thread needs to loop, so before sender names being updated, it detects a new sender name and registers itself
+    SpoutDXToCFreeSender(consumer->spout_sender, spout_names, consumer->name);
+    SPOUTDXTOC_NAMELIST new_list = {0};
+    SPOUTDXTOC_NAMELIST added = {0};
+    SPOUTDXTOC_NAMELIST removed = {0};
+    SpoutDXToCGetSenderList(spout_names, &list, &new_list, &added, &removed);
+    SpoutDXToCNamelistClear(&list);
+    SpoutDXToCNamelistClear(&added);
+    SpoutDXToCNamelistClear(&removed);
+    list = new_list;
+    if(sendernames_thread_handle)
+        ResumeThread(sendernames_thread_handle);
+    TRACE("sender destroyed returning...\n");
+    return STATUS_SUCCESS;
+}
 static void trigger_restart(void) {
     TRACE("Restarting service due to error\n");
     do_restart = true;
@@ -424,10 +486,8 @@ static struct source_info get_receiver_info_vk (struct receiver *receiver) {
     ret.format = info.format;
     ret.usage = info.usage;
 
-    if (!info.changed && !receiver->force_update){
-        vkchangexpect = 0;
+    if (!info.changed && !receiver->force_update)
         return ret;
-    }
 
     receiver->force_update = true;
 
@@ -456,7 +516,7 @@ static struct source_info get_receiver_info_vk (struct receiver *receiver) {
     TRACE("MiscFlags      = 0x%x\n", dxmetadata.MiscFlags);
     TRACE("TextureLayout  = %d\n", dxmetadata.TextureLayout);
 
-    int fd = kmtovk(info.shareHandle, dxmetadata, spout);
+    int fd = kmtovk(info.shareHandle);
 
     if(fd == -1){
         ret.flags |= RECEIVER_TEXTURE_INVALID;
@@ -524,12 +584,12 @@ static struct receiver *find_receiver(const char *name) {
 }
 
 static void add_receiver(const char *name) {
-    SPOUTDXTOC_RECEIVER *spout = SpoutDXToCNewReceiver(name);
+    SPOUTDXTOC_RECEIVER *spout = NULL;
+    spout = SpoutDXToCNewReceiver(name);
     if (!spout) {
         TRACE("Failed to create receiver for %s\n", name);
         return;
     }
-
     struct receiver *receiver = calloc(1, sizeof(struct receiver));
 
     receiver->name = strdup(name);
@@ -572,7 +632,6 @@ free:
 static DWORD WINAPI sendernames_thread(void *arg) {
     TRACE("Sendernames thread started\n");
 
-    SPOUTDXTOC_NAMELIST list = {0};
     do {
         SPOUTDXTOC_NAMELIST new_list = {0};
         SPOUTDXTOC_NAMELIST added = {0};
@@ -646,7 +705,9 @@ static const char *PE_getenv(int var) {
 
     return params.val;
 }
-
+static DWORD WINAPI pwlisthread(void *arg){
+    UNIX_CALL(initpw,NULL);
+} 
 static void WINAPI ServiceMain(DWORD argc, LPWSTR *argv) {
     NTSTATUS ret;
     const char *msg = NULL;
@@ -676,7 +737,8 @@ static void WINAPI ServiceMain(DWORD argc, LPWSTR *argv) {
 
 restart:
     const char* wine10 = PE_getenv(10);
-    if(wine10 && strcasecmp(wine10, "1") == 0){
+    bool compal10 = wine10 && (strcasecmp(wine10, "1") == 0);
+    if(compal10){
         TRACE("Setting wine10 backwards compatibility on PE\n");
         get_receiver_info = get_receiver_info_kmt;
     }else{
@@ -694,6 +756,8 @@ restart:
     struct startup_params params = {
         .lock_texture = (UINT_PTR)lock_texture,
         .unlock_texture = (UINT_PTR)unlock_texture,
+        .create_spout_sender = compal10?(UINT_PTR)kmt_create_spout_sender:(UINT_PTR)vk_create_spout_sender,
+        .destroy_spout_sender = (UINT_PTR)destroy_spout_sender,
         .error_msg = NULL,
     };
 
@@ -702,6 +766,9 @@ restart:
         msg = params.error_msg;
         goto stop;
     }
+
+    TRACE("Initializing pw listener");
+    CreateThread(NULL, 0, pwlisthread, NULL, 0, 0);
 
     TRACE("Starting service\n");
 

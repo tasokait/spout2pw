@@ -3,12 +3,24 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
+#include <pipewire/stream.h>
+#include <pipewire/pipewire.h>
+#include <spa/utils/hook.h>
+#include <spa/param/video/raw.h>
+#include <spa/pod/builder.h>
+#include <spa/param/video/raw-utils.h>
+#include <spa/param/format-utils.h>
+#include <spa/param/peer.h>
+#include <spa/param/peer-utils.h>
 #include <funnel-vk.h>
 #include <funnel.h>
+#include <drm/drm_fourcc.h>
 
 #include "spout2pw_unix.h"
 #include <vulkan/vulkan_core.h>
 #include <ntstatus.h>
+#include "wine/server.h"
 
 #define API_VERSION VK_API_VERSION_1_0
 // #define HAVE_VK_1_1
@@ -56,7 +68,6 @@
 
 #define GET_EXTENSION_FUNCTION(_id)                                            \
     ((PFN_##_id)(vkGetInstanceProcAddr(instance, #_id)))
-
 static struct startup_params startup_params = {0};
 struct funnel_ctx *funnel;
 char *wine10;
@@ -77,6 +88,49 @@ struct source {
     bool update;
     bool dead;
 };
+
+typedef UINT D3DKMT_HANDLE;
+struct d3dkmt_object
+{
+    enum d3dkmt_type    type;           /* object type */
+    D3DKMT_HANDLE       local;          /* object local handle */
+    D3DKMT_HANDLE       global;         /* object global handle */
+    BOOL                shared;         /* object is shared using nt handles */
+    HANDLE              handle;         /* internal handle of the server object */
+};
+
+struct pw_consumer {
+    struct pw_consumer_shared shared_data;
+    uint32_t id;
+    struct pw_stream *stream;
+    struct spa_hook stream_listener;
+    struct spa_video_info_raw format;
+    //obs only exports with opengl modifier, in which modifiers are not supported by winevulkan driver atm, so there is no way to translate this into directx, so the best way atm, is to get both dx and pw vulkan images, and do a gpu copy from pwimage into dximage.
+    VkImage pwimage;
+    VkDeviceMemory pwmemory;
+    VkImage dximage;
+    VkDeviceMemory dxmemory;
+    VkCommandBuffer cmbuf;
+    VkImageMemoryBarrier barriers[2];
+    VkImageMemoryBarrier after;
+    VkImageCopy region;
+    VkSubmitInfo submitInfo;
+    VkFence fence;
+    VkQueue queue;
+    bool is_initialized;
+    bool is_destroying;
+    bool is_changed;
+    struct pw_consumer *next;
+};
+
+struct pwlistener {
+    struct pw_main_loop *loop;
+    struct pw_context *context;
+    struct pw_core *core;
+    struct pw_registry *registry;
+    struct spa_hook registry_listener;
+    struct pw_consumer *consumers;
+} clisten;
 
 static NTSTATUS errno_to_status(int err) {
     WINE_TRACE("errno = %d\n", err);
@@ -124,6 +178,41 @@ static NTSTATUS errno_to_status(int err) {
     }
 }
 
+static VkFormat spa_to_vk(enum spa_video_format spa){
+    switch(spa){
+        case SPA_VIDEO_FORMAT_RGBx:
+        case SPA_VIDEO_FORMAT_RGBA:
+            return VK_FORMAT_R8G8B8A8_UNORM;
+        case SPA_VIDEO_FORMAT_BGRx:
+        case SPA_VIDEO_FORMAT_BGRA:
+            return VK_FORMAT_B8G8R8A8_UNORM;
+        case SPA_VIDEO_FORMAT_xRGB:
+        case SPA_VIDEO_FORMAT_ARGB:
+        case SPA_VIDEO_FORMAT_xBGR:
+        case SPA_VIDEO_FORMAT_ABGR:
+            return VK_FORMAT_R8G8B8A8_UNORM;
+        case SPA_VIDEO_FORMAT_RGB:
+            return VK_FORMAT_R8G8B8_UNORM;
+        case SPA_VIDEO_FORMAT_BGR:
+            return VK_FORMAT_B8G8R8_UNORM;
+        case SPA_VIDEO_FORMAT_xRGB_210LE:
+        case SPA_VIDEO_FORMAT_ARGB_210LE:
+        case SPA_VIDEO_FORMAT_BGRx_102LE:
+        case SPA_VIDEO_FORMAT_BGRA_102LE:
+            return VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+        case SPA_VIDEO_FORMAT_xBGR_210LE:
+        case SPA_VIDEO_FORMAT_ABGR_210LE:
+        case SPA_VIDEO_FORMAT_RGBx_102LE:
+        case SPA_VIDEO_FORMAT_RGBA_102LE:
+            return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+        case SPA_VIDEO_FORMAT_ARGB64:
+            return VK_FORMAT_R16G16B16A16_UNORM;
+        case SPA_VIDEO_FORMAT_RGBA_F16:
+            return VK_FORMAT_R16G16B16A16_SFLOAT;
+        case SPA_VIDEO_FORMAT_RGBA_F32:
+            return VK_FORMAT_R32G32B32A32_SFLOAT;
+    }
+}
 static struct lock_texture_return *lock_texture(void *receiver) {
     void *ret_ptr;
     ULONG ret_len;
@@ -199,11 +288,9 @@ pthread_mutex_t vk_lock;
 struct {
     PFN_vkGetMemoryFdPropertiesKHR vkGetMemoryFdPropertiesKHR;
     PFN_vkGetImageMemoryRequirements2KHR vkGetImageMemoryRequirements2KHR;
-
 } vk;
 
-static VkBool32
-vulkan_message(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+static VkBool32 vulkan_message(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                VkDebugUtilsMessageTypeFlagsEXT type,
                const VkDebugUtilsMessengerCallbackDataEXT *callbackData,
                void *userData) {
@@ -240,6 +327,425 @@ vulkan_message(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
 
     return 0;
 }
+/*static inline void server_log(const char* logtype,const char* fmt,...){
+    va_list arg;
+    char _buf[512];
+    int __len = snprintf(_buf,sizeof(_buf),"[spout2pw:%s]",logtype);
+    va_start(arg, fmt);
+    int _len = vsnprintf(_buf + __len, sizeof(_buf) - __len,fmt, arg);
+    va_end(arg);
+    if (_len > 0) {
+        write(2, _buf, _len + __len);
+        fsync(2);
+    }
+}*/
+
+static void consumer_on_process(void *userdata)
+{
+    struct pw_consumer *context = userdata;
+    if(context->is_destroying || !context->is_initialized)
+        return;
+    struct pw_buffer *b = pw_stream_dequeue_buffer(context->stream);
+    if (b)
+        pw_stream_queue_buffer(context->stream, b);
+
+    pthread_mutex_lock(&vk_lock);
+    vkResetFences(device, 1, &context->fence);
+    vkQueueSubmit(context->queue, 1, &(context->submitInfo), context->fence);
+    vkWaitForFences(device, 1, &context->fence, VK_TRUE, UINT64_MAX);
+    pthread_mutex_unlock(&vk_lock);
+}
+
+static void on_param_changed(void *data, uint32_t id, const struct spa_pod *param){
+    TRACE("parameter negotiation begins, %d\n", id);
+    struct pw_consumer *context = data;
+
+    if(context->is_destroying)
+        return;
+    if(!param || id != SPA_PARAM_Format || spa_format_video_raw_parse(param, &context->format) < 0)
+        return;
+
+    TRACE("setting the buffer for negotiation\n");
+    if(context->shared_data.width != context->format.size.width || context->shared_data.height != context->format.size.height || context->shared_data.modifier != context->format.modifier){
+        context->shared_data.width = context->format.size.width;
+        context->shared_data.height = context->format.size.height;
+        context->shared_data.modifier = context->format.modifier;
+        context->is_changed = true;
+    }
+
+    uint8_t buffer[1024];
+    struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+    const struct spa_pod *params[2];
+    TRACE("spa pod building in param changed\n");
+    params[0] = spa_pod_builder_add_object(&b,
+        SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers,
+        SPA_PARAM_BUFFERS_buffers, SPA_POD_CHOICE_RANGE_Int(1, 1, 8),
+        SPA_PARAM_BUFFERS_blocks, SPA_POD_Int(1),
+        SPA_PARAM_BUFFERS_dataType, SPA_POD_CHOICE_FLAGS_Int(1 << SPA_DATA_DmaBuf),
+        0);
+
+    TRACE("updating stream parameters\n");
+    pw_stream_update_params(context->stream, params, 1);
+}
+
+static void on_remove_buffer(void *data, struct pw_buffer *pwbuf){
+    struct pw_consumer *context = data;
+
+    if (context->is_initialized){
+        pthread_mutex_lock(&vk_lock);
+        struct receiver_params params = {
+            .dispatch = {.callback = startup_params.destroy_spout_sender},
+            .receiver = &(context->shared_data),
+        };
+        void *ret_ptr = NULL;
+        ULONG ret_len = 0;
+        KeUserDispatchCallback(&params.dispatch, sizeof(params), &ret_ptr,&ret_len);
+        TRACE("Destroyed the spout sender\n");
+        vkFreeCommandBuffers(device, commandPool, 1, &(context->cmbuf));
+        vkDestroyFence(device, context->fence, nullptr);
+        vkDestroyImage(device, context->pwimage, nullptr);
+        vkDestroyImage(device, context->dximage, nullptr);
+        vkFreeMemory(device, context->pwmemory, nullptr);
+        vkFreeMemory(device, context->dxmemory, nullptr);
+        pthread_mutex_unlock(&vk_lock);
+        close(context->shared_data.pwfd);
+        close(context->shared_data.vkfd);
+        close(context->shared_data.ownfd);
+        close(context->shared_data.dxfd);
+        context->shared_data.pwfd = -1;
+        context->shared_data.vkfd = -1;
+        context->shared_data.ownfd = -1;
+        context->shared_data.dxfd = -1;
+        context->is_initialized = false;
+    }
+    TRACE("buffer data destroyed\n");
+    //free(context);
+}
+
+static void on_add_buffer(void *data, struct pw_buffer *pwbuf){
+    TRACE("buffer initialization of pw consumer\n");
+    struct pw_consumer *context = data;
+    if(pwbuf->buffer->datas[0].type != SPA_DATA_DmaBuf || (!context->is_changed && (fcntl(context->shared_data.pwfd, F_GETFD) != -1 || errno != EBADF)))
+        return;
+
+    if(context->is_initialized){
+        on_remove_buffer(data, pwbuf);
+    }
+
+    context->shared_data.pwfd = (int)pwbuf->buffer->datas[0].fd;
+    context->shared_data.ownfd = dup(context->shared_data.pwfd); //copy pipewire fd into ownfd, so we can have our own fd that we can control
+    context->shared_data.vkfd = dup(context->shared_data.ownfd); //copy ownfd into vkfd, so vulkan have its own fd, without disrupting anything
+    //none of above duplicates are cpu texture copy or gpu texture copy, it is the copy of file descriptor that represents the texture, the reason being, having more control!
+    context->shared_data.stride = pwbuf->buffer->datas[0].chunk->stride;
+    context->shared_data.offset = pwbuf->buffer->datas[0].chunk->offset;
+
+    TRACE("DMA-BUF ready for Vulkan: fd=%d %ux%u mod=0x%lx stride=%d\n", context->shared_data.pwfd, context->shared_data.width, context->shared_data.height, (unsigned long)context->shared_data.modifier, context->shared_data.stride);
+
+    VkSubresourceLayout pw_layout = {
+        .offset = context->shared_data.offset,
+        .size = 0,
+        .rowPitch = context->shared_data.stride,
+        .arrayPitch = 0,
+        .depthPitch = 0,
+    };
+    VkImageDrmFormatModifierExplicitCreateInfoEXT pw_drm_mod = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
+        .pNext = NULL,
+        .drmFormatModifier = context->shared_data.modifier,
+        .drmFormatModifierPlaneCount = 1,
+        .pPlaneLayouts = &pw_layout,
+    };
+
+    VkExternalMemoryImageCreateInfo pw_ext_img = {
+        .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+        .pNext = &pw_drm_mod,
+        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+    };
+
+    VkImageCreateInfo pw_img_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext = &pw_ext_img,
+        .flags = 0,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = spa_to_vk(context->format.format),
+        .extent = { context->shared_data.width, context->shared_data.height, 1 },
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+        .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+
+    pthread_mutex_lock(&vk_lock);
+    VkResult res = vkCreateImage(device, &pw_img_info, NULL, &(context->pwimage));
+    if(res != VK_SUCCESS)
+        ERR("pipewire vulkan image creation failed: %d\n", res);
+
+    VkMemoryDedicatedRequirements pw_dedicated_reqs = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS,
+    };
+
+    VkMemoryRequirements2 pw_mem_reqs2 = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2,
+        .pNext = &pw_dedicated_reqs,
+    };
+    VkImageMemoryRequirementsInfo2 pw_img_reqs_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2,
+        .image = context->pwimage,
+    };
+    vkGetImageMemoryRequirements2(device, &pw_img_reqs_info, &pw_mem_reqs2);
+    TRACE("got vulkan memory requirements\n");
+
+    VkMemoryFdPropertiesKHR pw_fd_props = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
+    };
+
+    res = vk.vkGetMemoryFdPropertiesKHR(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, context->shared_data.vkfd,&pw_fd_props);
+    if(res != VK_SUCCESS)
+        ERR("pipewire vulkan getting fd properties failed: %d\n", res);
+    uint32_t memoryTypeIndex = UINT32_MAX;
+    uint32_t typeBits = pw_mem_reqs2.memoryRequirements.memoryTypeBits & pw_fd_props.memoryTypeBits;
+    VkPhysicalDeviceMemoryProperties mem_props;
+    vkGetPhysicalDeviceMemoryProperties(physDevice, &mem_props);
+    TRACE("got vulkan memory properties\n");
+
+    for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
+        if ((typeBits & (1u << i)) == 0)
+            continue;
+
+        if (mem_props.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
+            memoryTypeIndex = i;
+            break;
+        }
+
+        if (memoryTypeIndex == UINT32_MAX)
+            memoryTypeIndex = i;
+    }
+    VkMemoryDedicatedAllocateInfo pw_dedicated = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+        .image = context->pwimage,
+        .buffer = VK_NULL_HANDLE,
+    };
+    VkImportMemoryFdInfoKHR pw_import = {
+        .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+        .pNext = &pw_dedicated,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+        .fd = context->shared_data.vkfd,
+    };
+    VkMemoryAllocateInfo pw_alloc_info = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = &pw_import,
+        .allocationSize = pw_mem_reqs2.memoryRequirements.size,
+        .memoryTypeIndex = memoryTypeIndex,
+    };
+    res = vkAllocateMemory(device, &pw_alloc_info, NULL, &(context->pwmemory));
+    if(res != VK_SUCCESS)
+        ERR("pipewire vulkan memory allocation failed: %d\n", res);
+    TRACE("allocated vulkan memory\n");
+    res = vkBindImageMemory(device, context->pwimage, context->pwmemory, 0);
+    if(res != VK_SUCCESS)
+        ERR("pipewire vulkan memory binding failed: %d\n", res);
+    TRACE("binded vulkan image memory\n");
+
+    struct receiver_params params = {
+        .dispatch = {.callback = startup_params.create_spout_sender},
+        .receiver = &(context->shared_data),
+    };
+    TRACE("calling spout sender creation on pe side\n");
+    void *ret_ptr = NULL;
+    ULONG ret_len = 0;
+    KeUserDispatchCallback(&params.dispatch, sizeof(params), &ret_ptr,&ret_len);
+    TRACE("spout sender creation was successful, attempting to import it...\n");
+    
+    VkExternalMemoryImageCreateInfo dx_ext_img = {
+        .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+    };
+    VkImageCreateInfo dx_img_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext = &dx_ext_img,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = VK_FORMAT_B8G8R8A8_UNORM,
+        .extent = {context->shared_data.width, context->shared_data.height, 1},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+    };
+
+    TRACE("dx image creation...\n");
+    res = vkCreateImage(device, &dx_img_info, nullptr, &(context->dximage));
+    if(res != VK_SUCCESS)
+        ERR("vulkan image creation allocation failed: %d\n", res);
+    const VkImageMemoryRequirementsInfo2 dx_img_reqs_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2,
+        .image = context->dximage,
+    };
+    VkMemoryRequirements2 dx_mem_reqs = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2,
+    };
+
+    vk.vkGetImageMemoryRequirements2KHR(device, &dx_img_reqs_info, &dx_mem_reqs);
+
+    VkImportMemoryFdInfoKHR dx_import = {
+        .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+        .fd = context->shared_data.dxfd,
+    };
+
+    uint32_t dx_memory_type_bits = dx_mem_reqs.memoryRequirements.memoryTypeBits;
+
+    if (preferredMemoryTypeBits & dx_memory_type_bits)
+        dx_memory_type_bits &= preferredMemoryTypeBits;
+
+    VkMemoryAllocateInfo dx_alloc_info = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = &dx_import,
+        .allocationSize = dx_mem_reqs.memoryRequirements.size,
+        .memoryTypeIndex = ffs(dx_memory_type_bits) - 1,
+    };
+
+    TRACE("dx memory allocation...\n");
+    res = vkAllocateMemory(device, &dx_alloc_info, nullptr, &(context->dxmemory));
+    if(res != VK_SUCCESS)
+        ERR("dx vulkan memory allocation failed: %d\n", res);
+    TRACE("dx memory binding...\n");
+    vkBindImageMemory(device, context->dximage, context->dxmemory, 0);
+    if(res != VK_SUCCESS)
+        ERR("dx vulkan memory binding failed: %d\n", res);
+
+    VkCommandBufferAllocateInfo bufallocInfo = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = commandPool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    };
+    TRACE("allocating blit command buffer...\n");
+    vkAllocateCommandBuffers(device, &bufallocInfo, &(context->cmbuf));
+    context->barriers[0] = (VkImageMemoryBarrier){
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = context->pwimage,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    context->barriers[1] = (VkImageMemoryBarrier){
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = context->dximage,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    context->after = (VkImageMemoryBarrier){
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = context->dximage,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    context->submitInfo = (VkSubmitInfo){
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &(context->cmbuf),
+    };
+    VkCommandBufferBeginInfo beginInfo = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = 0
+    };
+    VkFenceCreateInfo fenceInfo = {
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+        .flags = 0,
+    };
+    vkCreateFence(device, &fenceInfo, nullptr, &(context->fence));
+    vkGetDeviceQueue(device, queueFamilyIndex , 0, &(context->queue));
+    res = vkBeginCommandBuffer(context->cmbuf, &beginInfo);
+    if(res != VK_SUCCESS)
+        ERR("pipewire dx vulkan begin command buffer failed: %d\n", res);
+    vkCmdPipelineBarrier(context->cmbuf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, context->barriers);
+    if(context->format.format != SPA_VIDEO_FORMAT_BGRA){
+        VkImageBlit blit = {
+            .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+            .srcOffsets = {{0, 0, 0}, {(int32_t)context->shared_data.width, (int32_t)context->shared_data.height, 1}},
+            .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+            .dstOffsets = {{0, 0, 0}, {(int32_t)context->shared_data.width, (int32_t)context->shared_data.height, 1}},
+        };
+        vkCmdBlitImage(context->cmbuf,context->pwimage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, context->dximage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1, &blit, VK_FILTER_NEAREST);
+    }else{
+        //has less blit overhead, but only works if the source and destination have the same color format
+        VkImageCopy region = {
+            .srcSubresource = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
+            .srcOffset = {0, 0, 0},
+            .dstSubresource = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
+            .dstOffset = {0, 0, 0},
+            .extent = {context->shared_data.width, context->shared_data.height, 1}
+        };
+        vkCmdCopyImage(context->cmbuf,context->pwimage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, context->dximage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1, &region);
+    }
+    vkCmdPipelineBarrier(context->cmbuf, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &context->after);
+    res = vkEndCommandBuffer(context->cmbuf);
+    if(res != VK_SUCCESS)
+        ERR("pipewire dx vulkan end command buffer failed: %d\n", res);
+    res = vkQueueSubmit(context->queue, 1, &(context->submitInfo), context->fence);
+    vkWaitForFences(device, 1, &context->fence, VK_TRUE, UINT64_MAX); 
+    pthread_mutex_unlock(&vk_lock);
+    if(res != VK_SUCCESS)
+        ERR("pipewire dx vulkan queue submit failed: %d\n", res);
+    context->is_initialized = true;
+    context->is_changed = false;
+}
+
+static const struct pw_stream_events stream_events = {
+    PW_VERSION_STREAM_EVENTS,
+    .param_changed = on_param_changed,
+    .add_buffer = on_add_buffer,
+    .remove_buffer = on_remove_buffer,
+    .process = consumer_on_process,
+};
 
 static bool getflag(const char *name) {
     const char *val = getenv(name);
@@ -250,6 +756,159 @@ static bool getflag(const char *name) {
     return !strcmp(val, "1");
 }
 
+static void registry_event_global(void *data, uint32_t id, uint32_t permissions, const char *type, uint32_t version, const struct spa_dict *props){
+    struct pwlistener *context = data;
+    const char *name, *klass, *role;
+
+    if (strcmp(type, PW_TYPE_INTERFACE_Node) != 0 || props == NULL)
+        return;
+
+    name  = spa_dict_lookup(props, PW_KEY_NODE_NAME);
+    klass = spa_dict_lookup(props, PW_KEY_MEDIA_CLASS);
+    role  = spa_dict_lookup(props, PW_KEY_MEDIA_ROLE);
+
+    if (!name || strncmp(name, "spout:", 6) != 0)
+        return;
+    if (!klass || strcmp(klass, "Stream/Output/Video") != 0)
+        return;
+    if (!role || strcmp(role, "Production") != 0)
+        return;
+
+    TRACE("a new spout pipewire detected, doing initialization of pw consumer\n");
+    struct pw_consumer *consumer;
+    struct pw_properties *pwprops;
+    uint8_t buffer[1024];
+    struct spa_pod_builder pw_buffer = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+    const struct spa_pod *params[1];
+    //size_t cindex;
+    const char* prepend = "consumer:";
+    size_t node_name_size = strlen(name) + strlen(prepend) + 1;
+    char *final_name = malloc(node_name_size);
+    strcpy(final_name, prepend);
+    strcat(final_name, name);
+
+    pwprops = pw_properties_new(
+        PW_KEY_MEDIA_TYPE,       "Video",
+        PW_KEY_MEDIA_CATEGORY,   "Capture",
+        PW_KEY_MEDIA_ROLE,       "Production",
+        PW_KEY_MEDIA_CLASS,      "Stream/Input/Video",
+        PW_KEY_NODE_NAME,        final_name,
+        PW_KEY_TARGET_OBJECT,    name,
+        NULL);
+    consumer = calloc(1, sizeof(struct pw_consumer));
+    consumer->shared_data.name = final_name;
+    consumer->id = id;
+    consumer->next = context->consumers;
+    consumer->shared_data.pwfd = -1;
+    consumer->shared_data.vkfd = -1;
+    consumer->shared_data.ownfd = -1;
+    consumer->shared_data.dxfd = -1;
+    consumer->shared_data.height = 0;
+    consumer->shared_data.width = 0;
+    consumer->shared_data.modifier = 0;
+    consumer->shared_data.stride = 0;
+    consumer->shared_data.offset = 0;
+    consumer->is_initialized = false;
+    consumer->is_destroying = false;
+    consumer->is_changed = false;
+    context->consumers = consumer;
+    consumer->stream = pw_stream_new(clisten.core, final_name, pwprops);
+    TRACE("new pw stream got made\n");
+    spa_zero(consumer->stream_listener);
+    pw_stream_add_listener(consumer->stream, &consumer->stream_listener, &stream_events, consumer);
+    params[0] = spa_pod_builder_add_object(&pw_buffer,
+                                           SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
+                                           SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video),
+                                           SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+                                           SPA_FORMAT_VIDEO_format, SPA_POD_CHOICE_ENUM_Id(20,
+                                            SPA_VIDEO_FORMAT_BGRA,
+                                            SPA_VIDEO_FORMAT_BGRx,
+                                            SPA_VIDEO_FORMAT_ABGR,
+                                            SPA_VIDEO_FORMAT_BGR,
+                                            SPA_VIDEO_FORMAT_RGBA,
+                                            SPA_VIDEO_FORMAT_ARGB,
+                                            SPA_VIDEO_FORMAT_RGBx,
+                                            SPA_VIDEO_FORMAT_xRGB,
+                                            SPA_VIDEO_FORMAT_xBGR,
+                                            SPA_VIDEO_FORMAT_RGB,
+                                            SPA_VIDEO_FORMAT_BGRA_102LE,
+                                            SPA_VIDEO_FORMAT_BGRx_102LE,
+                                            SPA_VIDEO_FORMAT_ABGR_210LE,
+                                            SPA_VIDEO_FORMAT_xBGR_210LE,
+                                            SPA_VIDEO_FORMAT_RGBA_102LE,
+                                            SPA_VIDEO_FORMAT_RGBx_102LE,
+                                            SPA_VIDEO_FORMAT_ARGB_210LE,
+                                            SPA_VIDEO_FORMAT_xRGB_210LE,
+                                            SPA_VIDEO_FORMAT_RGBA_F16,
+                                            SPA_VIDEO_FORMAT_RGBA_F32),
+                                           SPA_FORMAT_VIDEO_size, SPA_POD_CHOICE_RANGE_Rectangle(
+                                            &SPA_RECTANGLE(640, 480),
+                                            &SPA_RECTANGLE(1, 1),
+                                            &SPA_RECTANGLE(16384, 16384)),
+                                           SPA_FORMAT_VIDEO_framerate, SPA_POD_CHOICE_RANGE_Fraction(
+                                            &SPA_FRACTION(30, 1),
+                                            &SPA_FRACTION(0, 1),
+                                            &SPA_FRACTION(1000, 1)));
+    pw_stream_connect(consumer->stream,
+                      PW_DIRECTION_INPUT,
+                      PW_ID_ANY,
+                      PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS,
+                      params, 1);
+
+    TRACE("pw consumer initialized\n");
+}
+
+static void registry_event_global_remove(void *data, uint32_t id){
+    struct pwlistener *context = data;
+    struct pw_consumer *prev = NULL;
+    struct pw_consumer *curr = context->consumers;
+    while (curr) {
+        if (curr->id == id) {
+            TRACE("found the consumer to destroy\n");
+            struct pw_consumer *consumer = curr;
+            if (consumer->stream){
+                consumer->is_destroying = true;
+                pw_stream_set_active(consumer->stream, false);
+                TRACE("Consumer got disabled\n");
+                pw_stream_disconnect(consumer->stream);
+                TRACE("Consumer stream disconnected\n");
+                pw_stream_destroy(consumer->stream);
+                TRACE("Consumer stream destroyed\n");
+            }
+            if(prev)
+                prev->next = curr->next;
+            else
+                context->consumers = curr->next;
+            TRACE("freeing the consumer memory\n");
+            free(consumer->shared_data.name);
+            free(consumer);
+            consumer = NULL;
+            return;
+        }
+        prev = curr;
+        curr = curr->next;
+    }
+}
+
+static NTSTATUS initpw(void *args){
+    TRACE("initializing the listener\n");
+    pw_init(NULL, NULL);
+    static const struct pw_registry_events registry_events = {
+        PW_VERSION_REGISTRY_EVENTS,
+        .global        = registry_event_global,
+        .global_remove = registry_event_global_remove,
+    };
+    clisten.loop = pw_main_loop_new(NULL);
+    clisten.context = pw_context_new(pw_main_loop_get_loop(clisten.loop),NULL,0);
+    clisten.core = pw_context_connect(clisten.context, NULL, 0);
+    clisten.registry = pw_core_get_registry(clisten.core, PW_VERSION_REGISTRY, 0);
+    spa_zero(clisten.registry_listener);
+    pw_registry_add_listener(clisten.registry, &clisten.registry_listener, &registry_events, &clisten);
+    TRACE("pipewire listener initialized, running pw loop\n");
+    pw_main_loop_run(clisten.loop);
+    TRACE("pipewire listener thread finished\n");
+    return STATUS_SUCCESS;
+}
 static NTSTATUS startup(void *args) {
     struct startup_params *params = args;
 
@@ -515,7 +1174,6 @@ static NTSTATUS startup(void *args) {
         vk.vkGetMemoryFdPropertiesKHR =
             (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(
                 device, "vkGetMemoryFdPropertiesKHR");
-
         vkGetDeviceQueue(device, queueFamilyIndex, 0, &queue);
     }
 
@@ -543,6 +1201,7 @@ static NTSTATUS startup(void *args) {
                 preferredMemoryTypeBits |= 1L << i;
         }
     }
+    //TRACE("initializing pw thread\n");
 
     int ret = funnel_new(&funnel);
     if (ret) {
@@ -1235,13 +1894,13 @@ static NTSTATUS _getenv(void *args) {
 }
 const unixlib_entry_t __wine_unix_call_funcs[] = {
     _getenv,    startup,       _teardown,      create_source,
-    run_source, update_source, destroy_source,
+    run_source, update_source, destroy_source, initpw,
 };
 
 C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count);
 
 const unixlib_entry_t __wine_unix_call_wow64_funcs[] = {
     _getenv,    startup,       _teardown,      create_source,
-    run_source, update_source, destroy_source,
+    run_source, update_source, destroy_source, initpw,
 };
 C_ASSERT(ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_funcs_count);
