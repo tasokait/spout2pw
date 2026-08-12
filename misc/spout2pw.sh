@@ -399,7 +399,7 @@ prepare_proton() {
         fatal "This Proton version is too old to work with Spout2PW.\n\nSpout2PW requires a recent Proton 10 or Proton 11 build from here: \033]8;;URL\033\\https://github.com/tasokait/proton-ge-spout2pw-fixes\033]8;;\033\\"
     fi
 
-    version="$(grep "^;; Version:" "$protonpath/files/share/wine/wine.inf" | cut -d: -f2 | sed -e 's/^ *//' -e 's/ *$//')"
+    declare -g version="$(grep "^;; Version:" "$protonpath/files/share/wine/wine.inf" | cut -d: -f2 | sed -e 's/^ *//' -e 's/ *$//')"
     version="${version%%}"
     log "Wine version: '$version'"
 
