@@ -53,6 +53,8 @@ c = meson.get_compiler('c')
 spoutdxtoc_proj = subproject('spoutdxtoc')
 spoutdxtoc_dep = spoutdxtoc_proj.get_variable('spoutdxtoc_dep')
 
+ifpwstatic = get_option('libpipewire_static')
+
 libfunnel_proj = subproject(
   'libfunnel',
   default_options: [
@@ -60,7 +62,7 @@ libfunnel_proj = subproject(
     'test_apps=false',
     'egl=false',
     'default_library=static',
-    'static_pipewire=true',
+    'static_pipewire=' + ifpwstatic.to_string(),
   ]
 )
 
@@ -84,12 +86,17 @@ windows_compiler_args = [
 
 windows_link_args = [ ]
 unix_compiler_args = [ '-DWINE_UNIX_LIB' ] + unix_include_args
-unix_link_args = [
-  '-l:ntdll.so',
-  '-Wl,--whole-archive',
-  '-Wl,' + get_option('libpipewire_static_lib'),
-  '-Wl,--no-whole-archive',
-]
+unix_link_args = ifpwstatic ? [
+        '-l:ntdll.so',
+        '-Wl,--whole-archive',
+        '-Wl,' + get_option('libpipewire_static_lib'),
+        '-Wl,--no-whole-archive',
+    ]:[
+        '-l:ntdll.so',
+        '-Wl,--whole-archive',
+        '-Wl,--no-whole-archive',
+    ]
+pipewire = ifpwstatic ? dependency('libpipewire-static-0.3', native: true, static: true) : dependency('libpipewire-0.3', native: true, static: true)
 
 windows_deps = [
   c.find_library('d3d11', dirs: wine_lib_paths),
@@ -100,11 +107,14 @@ windows_deps = [
 ]
 
 vulkan = dependency('vulkan', native: true)
+spa = dependency('libspa-0.2', native: true)
 
 unix_deps = [
   funnel,
   funnel_vk,
   vulkan,
+  pipewire,
+  spa,
 ]
 
 foreach p : unix_lib_paths

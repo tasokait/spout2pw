@@ -4,6 +4,7 @@ set -e
 base="$(realpath $(dirname "$0"))"
 
 builddir="$base/build"
+dyn_buliddir="$base/dynbuild"
 pw_builddir="$base/build-pw"
 pw_srcdir="$base/subprojects/pipewire-static"
 
@@ -59,6 +60,14 @@ meson setup \
     --native-file "$builddir/native.txt" \
     --cross-file "$base"/misc/x86_64-w64-mingw32.txt \
     -Dlibpipewire_static_lib="$builddir/prefix/usr/lib/libpipewire-static-0.3.a" \
+    -Dlibpipewire_static=true \
     "$builddir" "$base" || { cat build/meson-logs/meson-log.txt; false; }
 
 ninja -C "$builddir" install
+
+meson setup \
+    --cross-file "$base"/misc/x86_64-w64-mingw32.txt \
+    -Dlibpipewire_static=false \
+    "$dyn_buliddir" "$base" || { cat build/meson-logs/meson-log.txt; false; }
+
+ninja -C "$dyn_buliddir" install
