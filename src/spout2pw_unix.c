@@ -402,11 +402,11 @@ static void on_remove_buffer(void *data, struct pw_buffer *pwbuf){
         KeUserDispatchCallback(&params.dispatch, sizeof(params), &ret_ptr,&ret_len);
         TRACE("Destroyed the spout sender\n");
         vkFreeCommandBuffers(device, commandPool, 1, &(context->cmbuf));
-        vkDestroyFence(device, context->fence, nullptr);
-        vkDestroyImage(device, context->pwimage, nullptr);
-        vkDestroyImage(device, context->dximage, nullptr);
-        vkFreeMemory(device, context->pwmemory, nullptr);
-        vkFreeMemory(device, context->dxmemory, nullptr);
+        vkDestroyFence(device, context->fence, NULL);
+        vkDestroyImage(device, context->pwimage, NULL);
+        vkDestroyImage(device, context->dximage, NULL);
+        vkFreeMemory(device, context->pwmemory, NULL);
+        vkFreeMemory(device, context->dxmemory, NULL);
         pthread_mutex_unlock(&vk_lock);
         close(context->shared_data.pwfd);
         close(context->shared_data.vkfd);
@@ -579,7 +579,7 @@ static void on_add_buffer(void *data, struct pw_buffer *pwbuf){
     };
 
     TRACE("dx image creation...\n");
-    res = vkCreateImage(device, &dx_img_info, nullptr, &(context->dximage));
+    res = vkCreateImage(device, &dx_img_info, NULL, &(context->dximage));
     if(res != VK_SUCCESS)
         ERR("vulkan image creation allocation failed: %d\n", res);
     const VkImageMemoryRequirementsInfo2 dx_img_reqs_info = {
@@ -611,7 +611,7 @@ static void on_add_buffer(void *data, struct pw_buffer *pwbuf){
     };
 
     TRACE("dx memory allocation...\n");
-    res = vkAllocateMemory(device, &dx_alloc_info, nullptr, &(context->dxmemory));
+    res = vkAllocateMemory(device, &dx_alloc_info, NULL, &(context->dxmemory));
     if(res != VK_SUCCESS)
         ERR("dx vulkan memory allocation failed: %d\n", res);
     TRACE("dx memory binding...\n");
@@ -691,12 +691,12 @@ static void on_add_buffer(void *data, struct pw_buffer *pwbuf){
         .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
         .flags = 0,
     };
-    vkCreateFence(device, &fenceInfo, nullptr, &(context->fence));
+    vkCreateFence(device, &fenceInfo, NULL, &(context->fence));
     vkGetDeviceQueue(device, queueFamilyIndex , 0, &(context->queue));
     res = vkBeginCommandBuffer(context->cmbuf, &beginInfo);
     if(res != VK_SUCCESS)
         ERR("pipewire dx vulkan begin command buffer failed: %d\n", res);
-    vkCmdPipelineBarrier(context->cmbuf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, context->barriers);
+    vkCmdPipelineBarrier(context->cmbuf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 2, context->barriers);
     if(context->format.format != SPA_VIDEO_FORMAT_BGRA){
         VkImageBlit blit = {
             .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
@@ -726,7 +726,7 @@ static void on_add_buffer(void *data, struct pw_buffer *pwbuf){
         };
         vkCmdCopyImage(context->cmbuf,context->pwimage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, context->dximage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1, &region);
     }
-    vkCmdPipelineBarrier(context->cmbuf, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &context->after);
+    vkCmdPipelineBarrier(context->cmbuf, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1, &context->after);
     res = vkEndCommandBuffer(context->cmbuf);
     if(res != VK_SUCCESS)
         ERR("pipewire dx vulkan end command buffer failed: %d\n", res);
