@@ -1,0 +1,87 @@
+{
+  "nodes": {
+    "flakelight": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1791234655,
+        "narHash": "sha256-TiUAy+xmhm7mq6f4e9M+emMGiJoS8Cl5ZFULXd9xSMk=",
+        "owner": "nix-community",
+        "repo": "flakelight",
+        "rev": "e4b3afcae05c52683d451a8fdbc12a3ece77a831",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "flakelight",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1791594108,
+        "narHash": "sha256-XK4KceonkwD8LuMAt/vNrz982mXJM5jeHAxMwsUXXAQ=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "6510408d147d8c5e6d76043e899e9251756f6a75",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "flakelight": "flakelight",
+        "nixpkgs": "nixpkgs",
+        "subprojects-libfunnel": "subprojects-libfunnel",
+        "subprojects-pipewire-static": "subprojects-pipewire-static",
+        "subprojects-spoutdxtoc": "subprojects-spoutdxtoc"
+      }
+    },
+    "subprojects-libfunnel": {
+      "flake": false,
+      "locked": {
+        "path": "subprojects/libfunnel",
+        "type": "path"
+      },
+      "original": {
+        "path": "subprojects/libfunnel",
+        "type": "path"
+      },
+      "parent": []
+    },
+    "subprojects-pipewire-static": {
+      "flake": false,
+      "locked": {
+        "path": "subprojects/pipewire-static",
+        "type": "path"
+      },
+      "original": {
+        "path": "subprojects/pipewire-static",
+        "type": "path"
+      },
+      "parent": []
+    },
+    "subprojects-spoutdxtoc": {
+      "flake": false,
+      "locked": {
+        "path": "subprojects/spoutdxtoc",
+        "type": "path"
+      },
+      "original": {
+        "path": "subprojects/spoutdxtoc",
+        "type": "path"
+      },
+      "parent": []
+    }
+  },
+  "root": "root",
+  "version": 7
+}

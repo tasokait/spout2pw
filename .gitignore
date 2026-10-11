@@ -2,3 +2,5 @@
 /build-pw/
 /dynbuild/
 .cache
+result
+result-*
