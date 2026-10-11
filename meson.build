@@ -96,7 +96,7 @@ unix_link_args = ifpwstatic ? [
         '-Wl,--whole-archive',
         '-Wl,--no-whole-archive',
     ]
-pipewire = ifpwstatic ? dependency('libpipewire-static-0.3', native: true, static: true) : dependency('libpipewire-0.3', native: true, static: true)
+pipewire = ifpwstatic ? dependency('libpipewire-static-0.3', native: true, static: true) : dependency('libpipewire-0.3', native: true, static: false)
 
 windows_deps = [
   c.find_library('d3d11', dirs: wine_lib_paths),
