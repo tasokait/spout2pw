@@ -81,13 +81,18 @@ If you want a desktop icon for the app you are starting with `spout2pw` you can 
 let
   # to get VNyan.ico icon use: `nix shell nixpkgs#icoutils --command sh -c 'wrestool -x -t14 VNyan.exe > VNyan.ico'`
   vNyanFolder = "${config.home.homeDirectory}/your/path/to/vnyan";
+  protonVersion = "GE-Proton11-1";
+  protonPath = pkgs.fetchzip {
+    url = "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/${protonVersion}/${protonVersion}.tar.gz";
+    hash = "sha256-I7SSvzQQ/NqdvwjpJ9IFFtAaTS+rgHUyXx0us1vIOnw=";
+  };
 in
 {
   xdg.desktopEntries = {
     vnyan = {
       name = "VNyan";
       genericName = "3D VTubing";
-      exec = "env PROTONPATH=GE-Proton ${lib.getExe pkgs.spout2pw} -quiet ${lib.getExe pkgs.umu-launcher} ${vNyanFolder}/VNyan.exe -portable -p ${config.home.username}";
+      exec = "env PROTONPATH=${protonPath} ${lib.getExe pkgs.spout2pw} -quiet ${lib.getExe pkgs.umu-launcher} ${vNyanFolder}/VNyan.exe -portable -p ${config.home.username}";
       icon = "${vNyanFolder}/VNyan.ico";
       terminal = false;
       categories = [
