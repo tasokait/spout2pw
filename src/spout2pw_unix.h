@@ -113,6 +113,11 @@ struct getenv_params {
     const char *val;
 };
 
+/* 0 when detection failed; the caller then keeps its compiled-in value. */
+struct reqid_params {
+    unsigned int req;
+};
+
 enum spout2pw_funcs {
     unix_getenv,
     unix_startup,
@@ -122,6 +127,7 @@ enum spout2pw_funcs {
     unix_update_source,
     unix_destroy_source,
     unix_initpw,
+    unix_get_d3dkmt_reqid,
     unix_funcs_count
 };
 

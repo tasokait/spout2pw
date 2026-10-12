@@ -1,9 +1,14 @@
+#define _GNU_SOURCE /* dl_iterate_phdr */
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <elf.h>
+#include <link.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <pipewire/stream.h>
 #include <pipewire/pipewire.h>
 #include <spa/utils/hook.h>
@@ -1892,9 +1897,117 @@ static NTSTATUS _getenv(void *args) {
     }
     return STATUS_SUCCESS;
 }
+/* The vendored wine/server_protocol.h can disagree with the Proton actually in
+ * use: Proton builds differ in how many server requests they define, which
+ * shifts every REQ_ value after the divergence. Sending a stale id silently
+ * dispatches to a neighbouring handler (d3dkmt_object_open_name, which fails
+ * with STATUS_OBJECT_PATH_SYNTAX_BAD). win32u compiles the correct id in, so
+ * read it back out of the copy already loaded in this process. */
+
+static int find_win32u_path(struct dl_phdr_info *info, size_t size, void *data) {
+    (void)size;
+    if (info->dlpi_name && strstr(info->dlpi_name, "win32u.so")) {
+        *(const char **)data = info->dlpi_name;
+        return 1;
+    }
+    return 0;
+}
+
+/* `movl $imm32, disp(%reg)` storing the request id into request_header.req */
+static unsigned int scan_for_reqid(const unsigned char *code, size_t len) {
+    unsigned int found = 0;
+    for (size_t i = 0; i + 6 < len; i++) {
+        if (code[i] != 0xc7) continue;
+        unsigned char modrm = code[i + 1];
+        unsigned int mod = modrm >> 6, rm = modrm & 7;
+        if (mod == 3) continue; /* register destination */
+        size_t j = i + 2;
+        if (rm == 4) j++;                        /* SIB */
+        if (mod == 1) j++;                       /* disp8 */
+        else if (mod == 2) j += 4;               /* disp32 */
+        else if (mod == 0 && rm == 5) j += 4;    /* rip-relative */
+        if (j + 4 > len) continue;
+        unsigned int imm;
+        memcpy(&imm, code + j, sizeof(imm));
+        if (imm < 0x100 || imm > 0x200) continue;
+        if (found && found != imm) return 0; /* ambiguous, don't guess */
+        found = imm;
+    }
+    return found;
+}
+
+static unsigned int read_reqid_from_win32u(const char *path) {
+    unsigned int result = 0;
+    struct stat st;
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    if (fstat(fd, &st) < 0 || st.st_size < (off_t)sizeof(Elf64_Ehdr)) { close(fd); return 0; }
+
+    const unsigned char *map = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (map == MAP_FAILED) return 0;
+
+    const Elf64_Ehdr *eh = (const Elf64_Ehdr *)map;
+    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) || eh->e_ident[EI_CLASS] != ELFCLASS64) goto done;
+
+    const Elf64_Shdr *sh = (const Elf64_Shdr *)(map + eh->e_shoff);
+    for (unsigned int i = 0; i < eh->e_shnum && !result; i++) {
+        if (sh[i].sh_type != SHT_SYMTAB || !sh[i].sh_entsize) continue;
+        const Elf64_Shdr *str = &sh[sh[i].sh_link];
+        size_t n = sh[i].sh_size / sh[i].sh_entsize;
+        const Elf64_Sym *sym = (const Elf64_Sym *)(map + sh[i].sh_offset);
+
+        for (size_t k = 0; k < n; k++) {
+            if (ELF64_ST_TYPE(sym[k].st_info) != STT_FUNC || !sym[k].st_size) continue;
+            const char *nm = (const char *)(map + str->sh_offset + sym[k].st_name);
+            /* accept GCC's .constprop/.isra suffixes, reject d3dkmt_object_open_name */
+            const char *suffix = nm + strlen("d3dkmt_object_open");
+            if (strncmp(nm, "d3dkmt_object_open", strlen("d3dkmt_object_open")) ||
+                (*suffix != '\0' && *suffix != '.'))
+                continue;
+
+            for (unsigned int c = 0; c < eh->e_shnum; c++) {
+                if (sh[c].sh_type == SHT_NOBITS) continue;
+                if (sym[k].st_value < sh[c].sh_addr ||
+                    sym[k].st_value + sym[k].st_size > sh[c].sh_addr + sh[c].sh_size)
+                    continue;
+                result = scan_for_reqid(map + sh[c].sh_offset + (sym[k].st_value - sh[c].sh_addr),
+                                        sym[k].st_size);
+                break;
+            }
+            if (result) break;
+        }
+    }
+
+done:
+    munmap((void *)map, st.st_size);
+    return result;
+}
+
+static NTSTATUS get_d3dkmt_reqid(void *args) {
+    static unsigned int cached = 0;
+    static int tried = 0;
+    struct reqid_params *params = args;
+
+    if (!tried) {
+        const char *path = NULL;
+        tried = 1;
+        dl_iterate_phdr(find_win32u_path, &path);
+        if (path && *path) cached = read_reqid_from_win32u(path);
+        if (cached)
+            WINE_TRACE("detected d3dkmt_object_open request id %u from %s\n", cached, path);
+        else
+            WINE_WARN("could not detect d3dkmt_object_open request id, using compiled-in value\n");
+    }
+
+    params->req = cached;
+    return STATUS_SUCCESS;
+}
+
 const unixlib_entry_t __wine_unix_call_funcs[] = {
     _getenv,    startup,       _teardown,      create_source,
     run_source, update_source, destroy_source, initpw,
+    get_d3dkmt_reqid,
 };
 
 C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count);
@@ -1902,5 +2015,6 @@ C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count);
 const unixlib_entry_t __wine_unix_call_wow64_funcs[] = {
     _getenv,    startup,       _teardown,      create_source,
     run_source, update_source, destroy_source, initpw,
+    get_d3dkmt_reqid,
 };
 C_ASSERT(ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_funcs_count);

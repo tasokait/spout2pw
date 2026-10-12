@@ -136,11 +136,27 @@ static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type
 }
 
 
+/* Ask the unix side what request id this Proton's win32u actually uses; our
+ * vendored server_protocol.h may be numbered for a different wine tree. */
+static int d3dkmt_open_reqid(void) {
+    static int cached = -1;
+    struct reqid_params params = {0};
+
+    if (cached >= 0) return cached;
+    cached = UNIX_CALL(get_d3dkmt_reqid, &params) == STATUS_SUCCESS ? (int)params.req : 0;
+    if (cached && cached != REQ_d3dkmt_object_open)
+        WARN("d3dkmt_object_open is request %d here, not the built-in %d\n",
+             cached, REQ_d3dkmt_object_open);
+    return cached;
+}
+
 static int kmtovk(uintptr_t kmt_handle){
     NTSTATUS status;
     int fd = -1;
     obj_handle_t fdhandle;
+    int reqid = d3dkmt_open_reqid();
     SERVER_START_REQ(d3dkmt_object_open) {
+        if (reqid) req->__header.req = reqid;
         req->type = D3DKMT_RESOURCE;
         req->global = (d3dkmt_handle_t)kmt_handle;
         status = wine_server_call(req);
