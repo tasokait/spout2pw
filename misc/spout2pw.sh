@@ -413,8 +413,16 @@ prepare_prefix() {
     # Install the service via the INF (AddService section)
     run_in_prefix cmd.exe /c "rundll32 setupapi.dll,InstallHinfSection DefaultInstall 128 C:\\windows\\system32\\spout2pw.inf" || fatal "Installation failed"
 
-    check_spout2pw_install || fatal "Installation unsuccessful"
-    show_info "Installation successful"
+    # Wine can return from setupapi before its registry files are flushed.
+    # Wait briefly for the existing on-disk verification to observe the service.
+    for install_check in {1..20}; do
+        if check_spout2pw_install; then
+            show_info "Installation successful"
+            return
+        fi
+        sleep 0.25
+    done
+    fatal "Installation unsuccessful: service registration did not become visible within 5 seconds"
 
 }
 
