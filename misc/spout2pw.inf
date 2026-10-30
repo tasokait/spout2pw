@@ -2,14 +2,14 @@
 Signature="$CHICAGO$"
 
 [DefaultInstall]
-WineFakeDlls = Spout2PwFakeDlls
+CopyFiles = Spout2PwFiles
 
 [DefaultInstall.Services]
 AddService = Spout2Pw,0,Spout2PwService
 
-[Spout2PwFakeDlls]
-11,,spout2pw.exe,*
-11,,spoutdxtoc.dll,*
+[Spout2PwFiles]
+spout2pw.exe,,,1
+spout2pw.dll,,,1
 
 [Spout2PwService]
 Description="Spout to PipeWire bridge"

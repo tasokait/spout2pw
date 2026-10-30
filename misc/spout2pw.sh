@@ -85,6 +85,7 @@ verchk() {
 }
 
 check_pipewire() {
+    [ "$SPOUT2PW_SKIP_PW_CHECK" = "1" ] && return 0
     pw_version="$(pw-dump | grep '"version": "' 2>/dev/null | head -n 1 | cut -d: -f2 | tr -d '", ')"
     [ -z "$pw_version" ] && fatal "Failed to check PipeWire daemon version"
     log "PipeWire version: $pw_version"
@@ -331,7 +332,7 @@ validate_paths() {
     fi
 }
 
-spout2pw_fakedlls="spout2pw.exe"
+spout2pw_builtindlls="spout2pw.dll"
 
 check_spout2pw_install() {
     check_nonexist() {
@@ -356,11 +357,23 @@ check_spout2pw_install() {
         return 0
     }
 
+    check_builtin() {
+        dst="$1"
+        log "  Checking builtin dll: $dst"
+        [ ! -e "$dst" ] && return 1
+        grep -q "Wine builtin DLL" "$dst" || return 1
+        return 0
+    }
+
     log "Checking for spout2pw files"
 
-    for file in $spout2pw_fakedlls; do
+    # Check spout2pw.exe is present and is a real executable (not a Wine stub)
+    check_file "$spout2pw/spout2pw-dlls/x86_64-windows/spout2pw.exe" "$system32/spout2pw.exe" || return 1
+    [ ! -e "$syswow64/spout2pw.exe" ] || return 1
+
+    for file in $spout2pw_builtindlls; do
         check_nonexist "$syswow64/$file" || return 1
-        check_fakedll "$system32/$file" || return 1
+        check_builtin "$system32/$file" || return 1
     done
 
     log "Checking for service"
@@ -380,14 +393,25 @@ prepare_prefix() {
     show_info "Installing/updating Spout2PW into Wine prefix..."
 
     # Delete spurious syswow64 copies
-    for file in $spout2pw_fakedlls; do
+    for file in $spout2pw_builtindlls; do
         [ -e "$syswow64/$file" ] && rm -f "$syswow64/$file"
     done
 
     # Make sure spout2pw does not start up during the install, as it could lock the file.
     [ -e "$system32/spout2pw.exe" ] && rm -f "$system32/spout2pw.exe"
-    
-    run_in_prefix cmd.exe /c "rundll32 setupapi.dll,InstallHinfSection DefaultInstall 128 Z:${spout2pw//\//\\}\\spout2pw.inf" || fatal "Installation failed"
+    for file in $spout2pw_builtindlls; do
+        [ -e "$system32/$file" ] && rm -f "$system32/$file"
+    done
+
+    # Copy the real spout2pw.exe executable and the builtin spout2pw.dll to system32 first.
+    # The INF's rundll32 setupapi call hangs if the prefix isn't fully initialized,
+    # but works reliably once spout2pw.exe and spout2pw.inf are already in system32.
+    cp "$spout2pw/spout2pw-dlls/x86_64-windows/spout2pw.exe" "$system32/spout2pw.exe"
+    cp "$spout2pw/spout2pw-dlls/x86_64-windows/spout2pw.dll" "$system32/spout2pw.dll"
+    cp "$spout2pw/spout2pw.inf" "$system32/spout2pw.inf"
+
+    # Install the service via the INF (AddService section)
+    run_in_prefix cmd.exe /c "rundll32 setupapi.dll,InstallHinfSection DefaultInstall 128 C:\\windows\\system32\\spout2pw.inf" || fatal "Installation failed"
 
     check_spout2pw_install || fatal "Installation unsuccessful"
     show_info "Installation successful"
@@ -425,6 +449,8 @@ setup_env() {
     ;;
     esac
     export WINEDLLPATH="$spout2pw/spout2pw-dlls"
+    # Silence DXVK's default info-level logging (game name, version, extensions).
+    # spout2pw captures textures via the DXVK interop API and doesn't need those logs.
     if [ "$enable_debug" = 1 ]; then
         export PROTON_LOG=+spout2pw
         export PIPEWIRE_DEBUG='funnel*:5'
@@ -487,8 +513,8 @@ main() {
 
     validate_paths
     prepare_proton
-    prepare_prefix
     setup_env
+    prepare_prefix
 
     ret=0
     "$@" || ret="$?"

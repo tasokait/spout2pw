@@ -88,8 +88,13 @@ windows_compiler_args = [
     '-mcx16', '-fno-strict-aliasing', '-ffunction-sections'
 ] + wine_include_args
 
-windows_link_args = [ ]
+windows_link_args = [
+  '-static-libgcc',
+  '-static-libstdc++',
+  '-static',
+]
 unix_compiler_args = [ '-DWINE_UNIX_LIB' ] + unix_include_args
+
 unix_link_args = ifpwstatic ? [
         '-lm',
         '-l:ntdll.so',
@@ -99,18 +104,21 @@ unix_link_args = ifpwstatic ? [
     ]:[
         '-lm',
         '-l:ntdll.so',
-        '-Wl,--whole-archive',
-        '-Wl,--no-whole-archive',
+        '-Wl,--no-as-needed',
+        '-lwinecrt0',
+        '-Wl,--as-needed',
     ]
 pipewire = ifpwstatic ? dependency('libpipewire-static-0.3', native: true, static: true) : dependency('libpipewire-0.3', native: true, static: false)
 
 windows_deps = [
   c.find_library('d3d11', dirs: wine_lib_paths),
   c.find_library('ntdll', dirs: wine_lib_paths),
-  c.find_library('ucrt', dirs: wine_lib_paths),
   c.find_library('winecrt0', dirs: wine_lib_paths),
   spoutdxtoc_dep,
 ]
+
+# Add static ucrtbase via link_args
+windows_link_args += ['/usr/x86_64-w64-mingw32/lib/libucrtbase.a']
 
 vulkan = dependency('vulkan', native: true)
 spa = dependency('libspa-0.2', native: true)
@@ -137,8 +145,29 @@ spout2pw_bin = executable(
   win_subsystem: 'console',
 )
 
+# Minimal DLL with DllMain that initializes the Wine unixlib handle.
+# This DLL is loaded as LO_BUILTIN (via the placeholder marker) so that
+# __wine_init_unix_call() succeeds from its DllMain, setting the global
+# __wine_unixlib_handle used by spout2pw.exe's ServiceMain.
+spout2pw_dll_src = [
+  'src/spout2pw_dll_main.c',
+]
+
+spout2pw_dll = shared_library(
+  'spout2pw_dll',
+  spout2pw_dll_src,
+  name_prefix: '',
+  c_args: windows_compiler_args,
+  link_args: windows_link_args,
+  dependencies: [
+    c.find_library('ntdll', dirs: wine_lib_paths),
+    c.find_library('winecrt0', dirs: wine_lib_paths),
+  ],
+  install: false,
+)
+
 unixlib = shared_library(
-  'spout2pw',
+  'spout2pw_unixlib',
   unix_src,
   name_prefix: '',
   c_args: unix_compiler_args,

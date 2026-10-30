@@ -2019,3 +2019,40 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] = {
     get_d3dkmt_reqid,
 };
 C_ASSERT(ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_funcs_count);
+
+/*
+ * Wine requires builtin unixlibs to export a __wine_spec_nt_header symbol.
+ * This is a minimal IMAGE_NT_HEADERS used by ntdll's map_so_dll() to set up
+ * the virtual view of the builtin module.
+ */
+#include <windows.h>
+
+const IMAGE_NT_HEADERS __wine_spec_nt_header = {
+    .Signature = IMAGE_NT_SIGNATURE,
+    .FileHeader = {
+        .Machine = IMAGE_FILE_MACHINE_AMD64,
+        .NumberOfSections = 2,
+        .SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64),
+        .Characteristics = IMAGE_FILE_DLL | IMAGE_FILE_LARGE_ADDRESS_AWARE,
+    },
+    .OptionalHeader = {
+        .Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC,
+        .MajorLinkerVersion = 7,
+        .MinorLinkerVersion = 10,
+        .AddressOfEntryPoint = 0,
+        .ImageBase = 0x180000000,
+        .SectionAlignment = 0x1000,
+        .FileAlignment = 0x200,
+        .MajorOperatingSystemVersion = 6,
+        .MinorOperatingSystemVersion = 0,
+        .MajorImageVersion = 0,
+        .MinorImageVersion = 0,
+        .MajorSubsystemVersion = 6,
+        .MinorSubsystemVersion = 0,
+        .SizeOfImage = 0x100000,
+        .SizeOfHeaders = 0x200,
+        .Subsystem = IMAGE_SUBSYSTEM_WINDOWS_CUI,
+        .DllCharacteristics = IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE,
+        .NumberOfRvaAndSizes = IMAGE_NUMBEROF_DIRECTORY_ENTRIES,
+    },
+};

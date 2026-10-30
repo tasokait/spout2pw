@@ -753,17 +753,6 @@ static void WINAPI ServiceMain(DWORD argc, LPWSTR *argv) {
     service_status.dwServiceSpecificExitCode = 0;
     service_status.dwCheckPoint = 1;
     service_status.dwWaitHint = 15000;
-    SetServiceStatus(service_handle, &service_status);
-
-    TRACE("Loading unix calls\n");
-
-    ret = __wine_init_unix_call();
-    if (ret != STATUS_SUCCESS) {
-        msg = "Error initializing UNIX library";
-        goto stop;
-    }
-
-    TRACE("Initializing spoutdxtoc.dll\n");
 
 restart:
     const char* wine10 = PE_getenv(10);
@@ -852,17 +841,26 @@ stop:
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+    fflush(stderr);
+    TRACE("WinMain entered\n");
     static const SERVICE_TABLE_ENTRYW service_table[] = {
         {spout2pwW, ServiceMain}, {NULL, NULL}
     };
 
     bool found = false;
+
+    WCHAR exe_path[MAX_PATH];
+    DWORD exe_len = GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+    TRACE("GetModuleFileNameW returned: %lu\n", exe_len);
     for (int i = 0; i < 100; i++) {
         char buf[16];
         sprintf(buf, "WINEDLLDIR%d", i);
         const char *val = getenv(buf);
-        if (!val)
+        TRACE("Loop iteration %d, checking %s\n", i, buf);
+        if (!val) {
+            TRACE("getenv(%s) returned NULL, breaking loop\n", buf);
             break;
+        }
         TRACE("Check DLL path: %s=%s\n", buf, val);
         size_t len = strlen(val);
         const char *match = "\\spout2pw-dlls";
@@ -876,6 +874,63 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         break;
     }
 
+    // Also check WINEDLLPATH (semicolon-separated list of directories)
+    // find_builtin_dll() searches WINEDLLPATH for the matching spout2pw.so
+    {
+        const char *winepath = getenv("WINEDLLPATH");
+        TRACE("WINEDLLPATH=%s\n", winepath ? winepath : "(null)");
+        if (winepath) {
+            // Duplicate and tokenize by semicolon
+            char *path_copy = strdup(winepath);
+            char *dir = strtok(path_copy, ";:");
+            while (dir) {
+                size_t len = strlen(dir);
+                const char *match = "\\spout2pw-dlls";
+                size_t mlen = strlen(match);
+                if (len >= mlen && strcmp(dir + len - mlen, match) == 0) {
+                    TRACE("WINEDLLPATH contains spout2pw-dlls directory\n");
+                    found = 1;
+                    break;
+                }
+                dir = strtok(NULL, ";:");
+            }
+            free(path_copy);
+        }
+    }
+
+    // Fallback: derive DLL path from executable location when WINEDLLDIR is not set
+    // (e.g. when started as a Windows service, Wine does not populate WINEDLLDIR)
+    TRACE("After scan loop: found=%d\n", found);
+    if (!found) {
+        TRACE("Fallback: deriving DLL path from executable location\n");
+        WCHAR exe_path[MAX_PATH];
+        DWORD exe_len = GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+        TRACE("GetModuleFileNameW returned: %lu\n", exe_len);
+        if (exe_len > 0 && exe_len < MAX_PATH) {
+            // Convert to UTF-8 and strip the executable name
+            char exe_utf8[MAX_PATH];
+            WideCharToMultiByte(CP_UTF8, 0, exe_path, -1, exe_utf8, sizeof(exe_utf8), NULL, NULL);
+            TRACE("Executable path (UTF-8): %s\n", exe_utf8);
+            char *last_sep = strrchr(exe_utf8, '\\');
+            if (last_sep) {
+                *last_sep = '\0';
+                // Strip the x86_64-windows/ component to get spout2pw-dlls/
+                // (Wine's find_builtin_dll looks for x86_64-unix/ subdir within WINEDLLPATH)
+                char *second_sep = strrchr(exe_utf8, '\\');
+                if (second_sep) {
+                    *second_sep = '\0';
+                    TRACE("Setting WINEDLLPATH to: %s\n", exe_utf8);
+                    SetEnvironmentVariableA("WINEDLLPATH", exe_utf8);
+                } else {
+                    // Fallback: use the directory as-is
+                    TRACE("Setting WINEDLLPATH to: %s\n", exe_utf8);
+                    SetEnvironmentVariableA("WINEDLLPATH", exe_utf8);
+                }
+                found = 1;
+            }
+        }
+    }
+
     if (!found) {
         ERR("Spout2 not configured in WINEDLLPATH\n");
         return 0;
@@ -885,6 +940,5 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     StartServiceCtrlDispatcherW(service_table);
 
-    TRACE("WinMain returning\n");
     return 0;
 }
