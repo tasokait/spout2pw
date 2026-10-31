@@ -92,9 +92,13 @@ windows_link_args = [
   '-static-libgcc',
   '-static-libstdc++',
   '-static',
-  # Prune unused CRT sections so msvcrt startup code (older mingw-w64 default)
-  # is dropped in favor of the UCRT path; exclude msvcrt's static archive so
-  # its DLL import is not pulled in.
+  # Force UCRT as the primary CRT on all mingw-w64 toolchains.
+  # Older toolchains default to msvcrt startup (which pulls msvcrt.dll into
+  # the PE import directory and crashes under Steam/Proton); wrapping libucrtbase
+  # in -Bstatic makes its symbols resolve before the default CRT, eliminating
+  # the msvcrt import entry entirely.
+  '-Wl,-Bstatic', '-lucrtbase', '-lgcc_eh', '-lgcc', '-Wl,-Bdynamic',
+  # Prune unused CRT sections; exclude msvcrt's static archive as a safety net.
   '-Wl,--gc-sections',
   '-Wl,--exclude-libs,libmsvcrt.a',
 ]
@@ -122,8 +126,7 @@ windows_deps = [
   spoutdxtoc_dep,
 ]
 
-# Add static ucrtbase via link_args
-windows_link_args += ['/usr/x86_64-w64-mingw32/lib/libucrtbase.a']
+# (UCRT is now forced via -Wl,-Bstatic -lucrtbase ... in windows_link_args above)
 
 vulkan = dependency('vulkan', native: true)
 spa = dependency('libspa-0.2', native: true)
