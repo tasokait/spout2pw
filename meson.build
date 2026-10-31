@@ -92,6 +92,11 @@ windows_link_args = [
   '-static-libgcc',
   '-static-libstdc++',
   '-static',
+  # Prune unused CRT sections so msvcrt startup code (older mingw-w64 default)
+  # is dropped in favor of the UCRT path; exclude msvcrt's static archive so
+  # its DLL import is not pulled in.
+  '-Wl,--gc-sections',
+  '-Wl,--exclude-libs,libmsvcrt.a',
 ]
 unix_compiler_args = [ '-DWINE_UNIX_LIB' ] + unix_include_args
 
