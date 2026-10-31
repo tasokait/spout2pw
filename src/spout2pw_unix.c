@@ -875,10 +875,15 @@ static void registry_event_global_remove(void *data, uint32_t id){
                 consumer->is_destroying = true;
                 pw_stream_set_active(consumer->stream, false);
                 TRACE("Consumer got disabled\n");
-                pw_stream_disconnect(consumer->stream);
+                spa_hook_remove(&consumer->stream_listener);
                 TRACE("Consumer stream disconnected\n");
                 pw_stream_destroy(consumer->stream);
                 TRACE("Consumer stream destroyed\n");
+                consumer->stream = NULL;
+            }
+            if (consumer->is_initialized){
+                TRACE("freeing buffer of the consumer memory\n");
+                on_remove_buffer(consumer, NULL);
             }
             if(prev)
                 prev->next = curr->next;
