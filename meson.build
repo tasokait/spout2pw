@@ -92,17 +92,18 @@ windows_link_args = [
   '-static-libgcc',
   '-static-libstdc++',
   '-static',
-  # Force UCRT as the primary CRT on all mingw-w64 toolchains.
-  # Older toolchains default to msvcrt startup (which pulls msvcrt.dll into
-  # the PE import directory and crashes under Steam/Proton); wrapping libucrtbase
-  # in -Bstatic makes its symbols resolve before the default CRT, eliminating
-  # the msvcrt import entry entirely. Use the explicit full path so the linker
-  # finds it regardless of whether -lucrtbase is in its search path (e.g. on
-  # ubuntu-24.04 CI where apt mingw-w64 does not add it there).
-  '-Wl,-Bstatic', '/usr/x86_64-w64-mingw32/lib/libucrtbase.a', '-lgcc_eh', '-lgcc', '-Wl,-Bdynamic',
-  # Prune unused CRT sections; exclude msvcrt's static archive as a safety net.
+  # Force UCRT as the primary CRT. Older mingw-w64 toolchains (e.g. Ubuntu
+  # 24.04's mingw-w64 11.0.1 / GCC 13-win32) default to msvcrt startup, which
+  # pulls msvcrt.dll into the PE import directory and crashes under Steam/Proton
+  # before WinMain runs. The stock collect2 `*libgcc:` spec unconditionally
+  # injects `-lmsvcrt` via pass-through, so a plain -lucrtbase cannot win.
+  # Instead we ship a GCC specs override (tools/mingw-ucrt.specs) that swaps
+  # `-lmsvcrt` for `-lucrtbase` in the libgcc link sequence, eliminating the
+  # msvcrt import entry entirely. -lucrtbase resolves via the cross-compiler's
+  # default library path on every target toolchain.
+  '--specs=' + join_paths(meson.project_source_root(), 'tools/mingw-ucrt.specs'),
+  # Prune unused CRT sections.
   '-Wl,--gc-sections',
-  '-Wl,--exclude-libs,libmsvcrt.a',
 ]
 unix_compiler_args = [ '-DWINE_UNIX_LIB' ] + unix_include_args
 

@@ -1,0 +1,18 @@
+# GCC specs override to force the UCRT as the primary CRT for mingw-w64 builds.
+#
+# Newer mingw-w64 toolchains (MSYS2 UCRT, Arch) select UCRT by default, so this
+# file is a no-op there. On older toolchains that still default to msvcrt
+# (e.g. Ubuntu 24.04's mingw-w64 11.0.1 / GCC 13-win32), the stock
+# `*libgcc:` spec unconditionally appends `-lmsvcrt` via collect2's pass-through,
+# which pulls msvcrt.dll into the PE import directory. That triggers a
+# mixed-CRT crash under Steam/Proton before WinMain runs.
+#
+# This file overrides `*libgcc:` to replace `-lmsvcrt` with `-lucrtbase`,
+# eliminating the msvcrt import entry entirely. The `-lucrtbase` reference is
+# resolved by the cross-compiler's default library search path
+# (`-L/.../x86_64-w64-mingw32/lib`), which always contains libucrtbase.a.
+#
+# Usage: pass `-Wl,--specs=<this file>` in windows_link_args.
+
+*libgcc:
+%{mthreads:-lmingwthrd} -lmingw32      %{static|static-libgcc:-lgcc -lgcc_eh}  %{!static:    %{!static-libgcc:      %{!shared:        %{!shared-libgcc:-lgcc -lgcc_eh}        %{shared-libgcc:-lgcc_s -lgcc}       }      %{shared:-lgcc_s -lgcc}     }   }     -lmoldname -lmingwex -lucrtbase -lkernel32
