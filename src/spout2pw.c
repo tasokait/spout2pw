@@ -1,5 +1,11 @@
 #define _POSIX_C_SOURCE 200809L
+#if defined(_WIN32)
 #include <string.h>
+#define strcasecmp  _stricmp
+#define strncasecmp _strnicmp
+#else
+#include <strings.h>
+#endif
 #include <wchar.h>
 
 #include "spout2pw_unix.h"
