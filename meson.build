@@ -96,8 +96,10 @@ windows_link_args = [
   # Older toolchains default to msvcrt startup (which pulls msvcrt.dll into
   # the PE import directory and crashes under Steam/Proton); wrapping libucrtbase
   # in -Bstatic makes its symbols resolve before the default CRT, eliminating
-  # the msvcrt import entry entirely.
-  '-Wl,-Bstatic', '-lucrtbase', '-lgcc_eh', '-lgcc', '-Wl,-Bdynamic',
+  # the msvcrt import entry entirely. Use the explicit full path so the linker
+  # finds it regardless of whether -lucrtbase is in its search path (e.g. on
+  # ubuntu-24.04 CI where apt mingw-w64 does not add it there).
+  '-Wl,-Bstatic', '/usr/x86_64-w64-mingw32/lib/libucrtbase.a', '-lgcc_eh', '-lgcc', '-Wl,-Bdynamic',
   # Prune unused CRT sections; exclude msvcrt's static archive as a safety net.
   '-Wl,--gc-sections',
   '-Wl,--exclude-libs,libmsvcrt.a',
