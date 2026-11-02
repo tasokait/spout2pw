@@ -413,10 +413,7 @@ static void on_remove_buffer(void *data, struct pw_buffer *pwbuf){
         vkFreeMemory(device, context->pwmemory, NULL);
         vkFreeMemory(device, context->dxmemory, NULL);
         pthread_mutex_unlock(&vk_lock);
-        close(context->shared_data.pwfd);
-        close(context->shared_data.vkfd);
         close(context->shared_data.ownfd);
-        close(context->shared_data.dxfd);
         context->shared_data.pwfd = -1;
         context->shared_data.vkfd = -1;
         context->shared_data.ownfd = -1;
