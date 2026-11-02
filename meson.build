@@ -91,11 +91,13 @@ windows_compiler_args = [
 windows_link_args = [ ]
 unix_compiler_args = [ '-DWINE_UNIX_LIB' ] + unix_include_args
 unix_link_args = ifpwstatic ? [
+        '-lm',
         '-l:ntdll.so',
         '-Wl,--whole-archive',
         '-Wl,' + get_option('libpipewire_static_lib'),
         '-Wl,--no-whole-archive',
     ]:[
+        '-lm',
         '-l:ntdll.so',
         '-Wl,--whole-archive',
         '-Wl,--no-whole-archive',
