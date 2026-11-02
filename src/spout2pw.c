@@ -267,6 +267,14 @@ static NTSTATUS WINAPI kmt_create_spout_sender(void *args, ULONG size){
     if(sendernames_thread_handle)
         SuspendThread(sendernames_thread_handle);
     consumer->spout_sender = SpoutDXToCAddSender(consumer->name, consumer->width, consumer->height, DXGI_FORMAT_B8G8R8A8_UNORM, spout_names, &(consumer->handle));
+    SPOUTDXTOC_NAMELIST new_list = {0};
+    SPOUTDXTOC_NAMELIST added = {0};
+    SPOUTDXTOC_NAMELIST removed = {0};
+    SpoutDXToCGetSenderList(spout_names, &list, &new_list, &added, &removed);
+    SpoutDXToCNamelistClear(&list);
+    SpoutDXToCNamelistClear(&added);
+    SpoutDXToCNamelistClear(&removed);
+    list = new_list;
     if(sendernames_thread_handle)
         ResumeThread(sendernames_thread_handle);
     HANDLE memhandle = open_shared_resource(consumer->handle);
