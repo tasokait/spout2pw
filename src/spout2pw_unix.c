@@ -787,8 +787,7 @@ static void registry_event_global(void *data, uint32_t id, uint32_t permissions,
     const struct spa_pod *params[1];
     //size_t cindex;
     const char* prepend = "consumer:";
-    size_t node_name_size = strlen(name) + strlen(prepend) + 1;
-    char *final_name = malloc(node_name_size);
+    char *final_name = calloc(1,256);
     strcpy(final_name, prepend);
     strcat(final_name, name);
 
