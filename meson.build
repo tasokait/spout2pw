@@ -1,4 +1,4 @@
-project('spout2pw', 'c',
+project('spout2pw', ['c','cpp'],
     meson_version: '>=1.1'
 )
 
@@ -50,7 +50,11 @@ endif
 
 c = meson.get_compiler('c')
 
-spoutdxtoc_proj = subproject('spoutdxtoc')
+spoutdxtoc_proj = subproject('spoutdxtoc',
+  default_options: [
+    'static=true',
+  ],
+)
 spoutdxtoc_dep = spoutdxtoc_proj.get_variable('spoutdxtoc_dep')
 
 ifpwstatic = get_option('libpipewire_static')

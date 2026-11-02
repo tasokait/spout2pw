@@ -331,7 +331,7 @@ validate_paths() {
     fi
 }
 
-spout2pw_fakedlls="spoutdxtoc.dll spout2pw.exe"
+spout2pw_fakedlls="spout2pw.exe"
 
 check_spout2pw_install() {
     check_nonexist() {

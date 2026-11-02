@@ -8,7 +8,6 @@ cd "$PKGDIR"
 
 mkdir -p spout2pw-dlls/x86_64-windows
 cp "${MESON_BUILD_ROOT}/spout2pw.exe" spout2pw-dlls/x86_64-windows
-cp "${MESON_BUILD_ROOT}/subprojects/spoutdxtoc/spoutdxtoc.dll" spout2pw-dlls/x86_64-windows
 mkdir -p spout2pw-dlls/x86_64-unix
 cp "${MESON_BUILD_ROOT}/spout2pw.so" spout2pw-dlls/x86_64-unix
 cp "${MESON_SOURCE_ROOT}/misc/spout2pw.inf" .
