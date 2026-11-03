@@ -754,6 +754,7 @@ static void WINAPI ServiceMain(DWORD argc, LPWSTR *argv) {
     service_status.dwCheckPoint = 1;
     service_status.dwWaitHint = 15000;
 
+    __wine_init_unix_call();
 restart:
     const char* wine10 = PE_getenv(10);
     bool compal10 = wine10 && (strcasecmp(wine10, "1") == 0);
