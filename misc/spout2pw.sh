@@ -78,6 +78,10 @@ check_environment() {
     home="$(realpath "$home")"
 }
 
+wine_server() {
+    WINEPREFIX="$wineprefix" "$protonpath/files/bin/wineserver" "$@"
+}
+
 verchk() {
     oldest=$(printf '%s\n' "$2" "$1" | sort -V | head -n1)
     log "  Version check: $1 >= $2, oldest: $oldest"
@@ -403,6 +407,10 @@ prepare_prefix() {
         [ -e "$system32/$file" ] && rm -f "$system32/$file"
     done
 
+    log "Trying to stop any running wineserver for this prefix"
+    wine_server -k 2>/dev/null || true
+    wine_server -w 2>/dev/null || true
+
     # Copy the real spout2pw.exe executable and the builtin spout2pw.dll to system32 first.
     # The INF's rundll32 setupapi call hangs if the prefix isn't fully initialized,
     # but works reliably once spout2pw.exe and spout2pw.inf are already in system32.
@@ -413,16 +421,28 @@ prepare_prefix() {
     # Install the service via the INF (AddService section)
     run_in_prefix cmd.exe /c "rundll32 setupapi.dll,InstallHinfSection DefaultInstall 128 C:\\windows\\system32\\spout2pw.inf" || fatal "Installation failed"
 
+    # waiting for wineserver to exit, which guarantees system.reg is written to disk
+    wine_ok=0
+    timeout 30 "$protonpath/files/bin/wineserver" -w || wine_ok=$?
+
     # Wine can return from setupapi before its registry files are flushed.
     # Wait briefly for the existing on-disk verification to observe the service.
-    for install_check in {1..20}; do
+    #this only runs if for whatever reason the first waiting fails.
+    if [ "$wine_ok" = 0 ]; then
         if check_spout2pw_install; then
             show_info "Installation successful"
             return
         fi
-        sleep 0.25
-    done
-    fatal "Installation unsuccessful: service registration did not become visible within 5 seconds"
+    else
+        for install_check in {1..20}; do
+            if check_spout2pw_install; then
+                show_info "Installation successful"
+                return
+            fi
+            sleep 0.25
+        done
+        fatal "Installation unsuccessful: service registration did not become visible within 5 seconds"
+    fi
 
 }
 
