@@ -416,9 +416,9 @@ prepare_prefix() {
     # Copy the real spout2pw.exe executable and the builtin spout2pw.dll to system32 first.
     # The INF's rundll32 setupapi call hangs if the prefix isn't fully initialized,
     # but works reliably once spout2pw.exe and spout2pw.inf are already in system32.
-    cp "$spout2pw/spout2pw-dlls/x86_64-windows/spout2pw.exe" "$system32/spout2pw.exe"
-    cp "$spout2pw/spout2pw-dlls/x86_64-windows/spout2pw.dll" "$system32/spout2pw.dll"
-    cp "$spout2pw/spout2pw.inf" "$system32/spout2pw.inf"
+    cp --no-preserve=mode,ownership "$spout2pw/spout2pw-dlls/x86_64-windows/spout2pw.exe" "$system32/spout2pw.exe"
+    cp --no-preserve=mode,ownership "$spout2pw/spout2pw-dlls/x86_64-windows/spout2pw.dll" "$system32/spout2pw.dll"
+    cp --no-preserve=mode,ownership "$spout2pw/spout2pw.inf" "$system32/spout2pw.inf"
 
     # Install the service via the INF (AddService section)
     run_in_prefix cmd.exe /c "rundll32 setupapi.dll,InstallHinfSection DefaultInstall 128 C:\\windows\\system32\\spout2pw.inf" || fatal "Installation failed"
