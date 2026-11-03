@@ -21,9 +21,7 @@
 #include <stdio.h>
 
 #include "ntstatus.h"
-
-/* Declared in dlls/ntdll/unix/unix_lib.c */
-extern NTSTATUS __wine_init_unix_call(void);
+#include "wine/unixlib.h"
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
 {
@@ -36,7 +34,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          * calls any UNIX_CALL macros.
          */
         __wine_init_unix_call();
-
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
     case DLL_PROCESS_DETACH:
