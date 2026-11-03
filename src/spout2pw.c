@@ -754,6 +754,12 @@ static void WINAPI ServiceMain(DWORD argc, LPWSTR *argv) {
     service_status.dwCheckPoint = 1;
     service_status.dwWaitHint = 15000;
 
+    ret = __wine_init_unix_call();
+    if (ret != STATUS_SUCCESS) {
+        msg = "Error initializing UNIX library";
+        goto stop;
+    }
+
 restart:
     const char* wine10 = PE_getenv(10);
     bool compal10 = wine10 && (strcasecmp(wine10, "1") == 0);
