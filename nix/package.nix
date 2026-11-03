@@ -44,12 +44,19 @@ stdenv.mkDerivation (finalAttrs: {
     # because windows_link_args uses `--specs`
     # and otherwise the linker argument `-lmcfgthread` set by nixpkgs gets lost
     (pkgsCross.mingwW64.stdenv.cc.override (old: {
-      cc = old.cc.override {
-        threadsCross = {
-          threadModel = "win32";
-          package = null;
-        };
-      };
+      cc = old.cc.override (old: {
+        # since https://github.com/NixOS/nixpkgs/commit/aa6fcb683a0b4c8cb5df738fe4418f4e8c2a1067
+        # threadsCross is a package instead of an attribute
+        # detect compatibility by checking `old.threadsCross`
+        threadsCross =
+          if lib.isDerivation old.threadsCross then
+            null
+          else
+            {
+              threadModel = "win32";
+              package = null;
+            };
+      });
     }))
   ];
 
