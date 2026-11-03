@@ -40,7 +40,17 @@ stdenv.mkDerivation (finalAttrs: {
     meson
     ninja
     cmake
-    pkgsCross.mingwW64.buildPackages.gcc
+    # use the win32 thread model,
+    # because windows_link_args uses `--specs`
+    # and otherwise the linker argument `-lmcfgthread` set by nixpkgs gets lost
+    (pkgsCross.mingwW64.stdenv.cc.override (old: {
+      cc = old.cc.override {
+        threadsCross = {
+          threadModel = "win32";
+          package = null;
+        };
+      };
+    }))
   ];
 
   depsBuildBuild = [
