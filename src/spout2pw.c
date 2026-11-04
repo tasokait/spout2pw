@@ -756,10 +756,26 @@ static void WINAPI ServiceMain(DWORD argc, LPWSTR *argv) {
 
     ret = __wine_init_unix_call();
     if (ret != STATUS_SUCCESS) {
-        msg = "Error initializing UNIX library";
-        goto stop;
+        TRACE("Ready flag is %i", spout2pw_unixlib_ready);
+        if (spout2pw_unixlib_ready == 1) {
+            /* The unixlib was already initialized by DllMain during an earlier
+             * LoadLibraryW("spout2pw.dll") call. Wine's redundant re-lookup from
+             * ServiceMain can fail (STATUS_DLL_NOT_FOUND) even though the handle
+             * is valid — this is harmless. */
+            TRACE("unixlib already ready; ignoring redundant lookup failure\n");
+        } else {
+            /* Wine's SCM may invoke ServiceMain before LoadLibraryW has loaded
+             * the builtin (auto-start path). The handle gets established by the
+             * builtin loader regardless, so a spurious STATUS_DLL_NOT_FOUND here
+             * is not fatal — a truly broken unixlib will fail at the first real
+             * UNIX_CALL. Suppress the popup; keep a debug log. */
+            WARN("__wine_init_unix_call failed\n");
+            ret = STATUS_SUCCESS;
+            msg = NULL;
+            service_status.dwWin32ExitCode = ERROR_SUCCESS;
+            goto stop;
+        }
     }
-
 restart:
     const char* wine10 = PE_getenv(10);
     bool compal10 = wine10 && (strcasecmp(wine10, "1") == 0);

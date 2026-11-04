@@ -75,6 +75,7 @@ funnel_vk = libfunnel_proj.get_variable('funnel_vk')
 
 windows_src = [
   'src/spout2pw.c',
+  'src/global.c',
 ]
 
 unix_src = [
@@ -162,6 +163,7 @@ spout2pw_bin = executable(
 # __wine_unixlib_handle used by spout2pw.exe's ServiceMain.
 spout2pw_dll_src = [
   'src/spout2pw_dll_main.c',
+  'src/global.c',
 ]
 
 spout2pw_dll = shared_library(
