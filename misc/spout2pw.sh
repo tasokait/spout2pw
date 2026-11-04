@@ -215,7 +215,8 @@ setup_umu() {
 
     # use `/usr/bin/env true` instead of `/bin/true` in case `true` is not installed in `/bin`
     # the WINEDLLPATH needs to be set in case spout2pw is already installed (the service is started)
-    readarray -t umu_vars <<<"$(WINEDLLPATH="$spout2pw/spout2pw-dlls" UMU_LOG=1 "$umu" /usr/bin/env true 2>&1 | grep 'umu_run:.*=' | sed 's/.*: //')"
+    # setting PROTONFIXES_DISABLE=1 in case the prefix does not exist yet, otherwise it hangs
+    readarray -t umu_vars <<<"$(PROTONFIXES_DISABLE=1 WINEDLLPATH="$spout2pw/spout2pw-dlls" UMU_LOG=1 "$umu" /usr/bin/env true 2>&1 | grep 'umu_run:.*=' | sed 's/.*: //')"
 
     for var in "${umu_vars[@]}"; do
         key="$(echo "$var" | cut -d= -f1)"
