@@ -5,6 +5,7 @@
 #include <ntstatus.h>
 
 #define WIN32_NO_STATUS
+#include <stdarg.h>
 #include <windef.h>
 
 #include <winbase.h>
@@ -38,6 +39,7 @@ KeUserDispatchCallback(const struct dispatch_callback_params *params, ULONG len,
 
 #endif
 
+extern int spout2pw_unixlib_ready;
 struct receiver_params {
     struct dispatch_callback_params dispatch;
     void *receiver;

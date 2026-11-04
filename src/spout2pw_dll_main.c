@@ -17,11 +17,9 @@
  * `if (!status)` guard in ntdll's MemoryWineUnixFuncs handling).
  */
 
-#include <windows.h>
-#include <stdio.h>
-
-#include "ntstatus.h"
-#include "wine/unixlib.h"
+#define _POSIX_C_SOURCE 200809L
+#include "spout2pw_unix.h"
+#define WIN32_NO_STATUS
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
 {
@@ -33,7 +31,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          * builtin module. This must happen before spout2pw.exe's ServiceMain
          * calls any UNIX_CALL macros.
          */
-        __wine_init_unix_call();
+        NTSTATUS ret = __wine_init_unix_call();
+        TRACE(" __wine_init_unix_call returned 0x%x\n", ret);
+        if (ret == STATUS_SUCCESS)
+            spout2pw_unixlib_ready = 1;
+        TRACE("set ready flag to 1");
+        break;
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
     case DLL_PROCESS_DETACH:
