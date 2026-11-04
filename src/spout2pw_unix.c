@@ -1220,14 +1220,14 @@ static NTSTATUS startup(void *args) {
         funnel_set_app_name(funnel, appname);
 
         char *appid;
-        assert(asprintf(&appid, "yt.lina.spout2pw.%s", appname));
+        assert(asprintf(&appid, "spout2pw.%s", appname));
         funnel_set_app_id(funnel, appid);
         free(appid);
     } else {
         ret = funnel_set_app_name(funnel, "Spout2PW");
         assert(ret == 0);
 
-        ret = funnel_set_app_id(funnel, "yt.lina.spout2pw");
+        ret = funnel_set_app_id(funnel, "spout2pw");
         assert(ret == 0);
     }
 

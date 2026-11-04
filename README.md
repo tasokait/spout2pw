@@ -2,12 +2,11 @@
 
 **[Spout2PW website](https://spout2pw.lina.yt)**
 
-[![Github-sponsors](https://img.shields.io/github/sponsors/hoshinolina?label=Sponsor&logo=GitHub)](https://lina.yt/sponsor)
-[![Ko-Fi](https://shields.io/badge/ko--fi-Tip-ff5f5f?logo=ko-fi)](https://lina.yt/kofi)
+[![buy me a coffee](https://img.shields.io/badge/buy_me_a-coffee-orange)](https://buymeacoffee.com/kaitsukita)
 
 **If you like this, please help support me with the links above!**
 
-See the [wiki page](https://github.com/hoshinolina/spout2pw/wiki) for installation and usage instructions.
+See the [wiki page](https://github.com/tasokait/spout2pw/wiki) for installation and usage instructions.
 
 ## Building
 
@@ -26,6 +25,7 @@ On Debian: `sudo apt install meson ninja-build libdbus-1-dev libwine-dev mingw-w
 ## Credits
 Original author:
 * hoshinolina
+(this repository is a maintained fork of her original work)
 
 Based on a prototype by tytan652:
 
@@ -48,7 +48,7 @@ To use this project on NixOS or by using the nix package manager, follow the fol
 
     ```nix
     inputs.spout2pw = {
-      url = "git+https://github.com/tasokait/spout2pw.git";
+      url = "git+https://github.com/tasokait/spout2pw.git?ref=refs/tags/v0.4.5";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     ```
