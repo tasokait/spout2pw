@@ -15,7 +15,7 @@
   pipewire,
   zenity,
   makeWrapper,
-  withWine ? wineWow64Packages.staging,
+  withWine ? wineWow64Packages.stable,
 }:
 stdenv.mkDerivation (finalAttrs: {
   pname = "spout2pw";

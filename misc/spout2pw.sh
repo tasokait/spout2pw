@@ -213,7 +213,9 @@ setup_umu() {
 
     log "Setting up Proton with umu-launcher ($PROTONPATH)..."
 
-    readarray -t umu_vars <<<"$(UMU_LOG=1 "$umu" /bin/true 2>&1 | grep 'umu_run:.*=' | sed 's/.*: //')"
+    # use `/usr/bin/env true` instead of `/bin/true` in case `true` is not installed in `/bin`
+    # the WINEDLLPATH needs to be set in case spout2pw is already installed (the service is started)
+    readarray -t umu_vars <<<"$(WINEDLLPATH="$spout2pw/spout2pw-dlls" UMU_LOG=1 "$umu" /usr/bin/env true 2>&1 | grep 'umu_run:.*=' | sed 's/.*: //')"
 
     for var in "${umu_vars[@]}"; do
         key="$(echo "$var" | cut -d= -f1)"
@@ -414,9 +416,9 @@ prepare_prefix() {
     # Copy the real spout2pw.exe executable and the builtin spout2pw.dll to system32 first.
     # The INF's rundll32 setupapi call hangs if the prefix isn't fully initialized,
     # but works reliably once spout2pw.exe and spout2pw.inf are already in system32.
-    cp "$spout2pw/spout2pw-dlls/x86_64-windows/spout2pw.exe" "$system32/spout2pw.exe"
-    cp "$spout2pw/spout2pw-dlls/x86_64-windows/spout2pw.dll" "$system32/spout2pw.dll"
-    cp "$spout2pw/spout2pw.inf" "$system32/spout2pw.inf"
+    cp --no-preserve=mode,ownership "$spout2pw/spout2pw-dlls/x86_64-windows/spout2pw.exe" "$system32/spout2pw.exe"
+    cp --no-preserve=mode,ownership "$spout2pw/spout2pw-dlls/x86_64-windows/spout2pw.dll" "$system32/spout2pw.dll"
+    cp --no-preserve=mode,ownership "$spout2pw/spout2pw.inf" "$system32/spout2pw.inf"
 
     # Install the service via the INF (AddService section)
     run_in_prefix cmd.exe /c "rundll32 setupapi.dll,InstallHinfSection DefaultInstall 128 C:\\windows\\system32\\spout2pw.inf" || fatal "Installation failed"

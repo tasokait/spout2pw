@@ -776,6 +776,7 @@ static void WINAPI ServiceMain(DWORD argc, LPWSTR *argv) {
             goto stop;
         }
     }
+
 restart:
     const char* wine10 = PE_getenv(10);
     bool compal10 = wine10 && (strcasecmp(wine10, "1") == 0);

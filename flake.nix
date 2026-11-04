@@ -17,6 +17,7 @@
   outputs =
     { flakelight, ... }:
     flakelight ./. {
+      pname = "spout2pw";
       packages.spout2pw = import ./nix/package.nix;
     };
 }
