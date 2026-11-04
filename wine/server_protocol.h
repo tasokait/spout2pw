@@ -139,7 +139,7 @@ struct context_data
         struct { unsigned __int64 rax, rbx, rcx, rdx, rbp, rsi, rdi,
                                   r8, r9, r10, r11, r12, r13, r14, r15; } x86_64_regs;
         struct { unsigned int r[13]; } arm_regs;
-        struct { unsigned __int64 x[31]; } arm64_regs;
+        struct { unsigned __int64 x0[18], x19[12]; } arm64_regs;
     } integer;
     union
     {
@@ -173,16 +173,21 @@ struct context_data
     {
         struct { struct { unsigned __int64 low, high; } ymm_high[16]; } regs;
     } ymm;
+    union
+    {
+        unsigned __int64 arm64_x18;
+    } tls;
 };
 
-#define SERVER_CTX_CONTROL            0x01
-#define SERVER_CTX_INTEGER            0x02
-#define SERVER_CTX_SEGMENTS           0x04
-#define SERVER_CTX_FLOATING_POINT     0x08
-#define SERVER_CTX_DEBUG_REGISTERS    0x10
-#define SERVER_CTX_EXTENDED_REGISTERS 0x20
-#define SERVER_CTX_YMM_REGISTERS      0x40
-#define SERVER_CTX_EXEC_SPACE         0x80
+#define SERVER_CTX_CONTROL            0x0001
+#define SERVER_CTX_INTEGER            0x0002
+#define SERVER_CTX_SEGMENTS           0x0004
+#define SERVER_CTX_FLOATING_POINT     0x0008
+#define SERVER_CTX_DEBUG_REGISTERS    0x0010
+#define SERVER_CTX_EXTENDED_REGISTERS 0x0020
+#define SERVER_CTX_YMM_REGISTERS      0x0040
+#define SERVER_CTX_EXEC_SPACE         0x0080
+#define SERVER_CTX_TLS                0x0100
 
 
 struct send_fd
@@ -259,6 +264,98 @@ struct rectangle
     int  right;
     int  bottom;
 };
+
+#define HWND_DMABUF_DESC_VERSION_V1       1
+#define HWND_DMABUF_MAX_DIRTY_RECTS       7
+#define HWND_DMABUF_MAX_PLANES            4
+
+enum hwnd_dmabuf_status
+{
+    HWND_DMABUF_OK = 0,
+    HWND_DMABUF_INVALID_ARGS = 1,
+    HWND_DMABUF_NOT_FOUND = 2,
+    HWND_DMABUF_NO_FRAME = 3,
+    HWND_DMABUF_BUSY = 4
+};
+
+#define HWND_DMABUF_RELEASE_PRESENTED     0x00000001
+#define HWND_DMABUF_RELEASE_FAILED        0x00000002
+#define HWND_DMABUF_RELEASE_DROPPED       0x00000004
+#define HWND_DMABUF_RELEASE_ORPHANED      0x00000008
+#define HWND_DMABUF_RELEASE_CACHED        0x00000010
+
+#define HWND_DMABUF_RELEASE_CONSUMER_ACTIVE    0x00000020
+#define HWND_DMABUF_RELEASE_CONSUMER_SUSPENDED 0x00000040
+
+
+/* image_id names a dmabuf slot whose backing store stays valid until its release
+ * token returns. The consumer may cache and reuse the wl_buffer for that slot.
+ * Producers that export a fresh dmabuf for every frame must not set this flag. */
+#define HWND_DMABUF_FLAG_STABLE_SLOT      0x00000001
+
+#define HWND_DMABUF_FLAG_SHM              0x00000002
+
+#define HWND_DMABUF_FLAG_GDI_OVERLAY      0x00000004
+
+#define HWND_DMABUF_FRAME_OPENED          0x00000001
+#define HWND_DMABUF_FRAME_GDI_OVERLAY     0x00000002
+
+#define HWND_DMABUF_CHANNEL_GDI_OVERLAY   0x00000001
+
+typedef struct
+{
+    unsigned short RedPrimary[2];
+    unsigned short GreenPrimary[2];
+    unsigned short BluePrimary[2];
+    unsigned short WhitePoint[2];
+    unsigned int   MaxMasteringLuminance;
+    unsigned int   MinMasteringLuminance;
+    unsigned short MaxContentLightLevel;
+    unsigned short MaxFrameAverageLightLevel;
+} hwnd_dmabuf_hdr_metadata_hdr10_t;
+
+typedef struct
+{
+    unsigned int     version;
+    unsigned int     flags;
+    unsigned int     width;
+    unsigned int     height;
+    unsigned int     fourcc;
+    unsigned int     stride;
+    unsigned int     offset;
+    unsigned int     frame_seq;
+    unsigned int     ring_generation;
+    unsigned int     image_id;
+    unsigned int     sync_fd_kind;
+    unsigned int     dirty_count;
+    unsigned short   dirty_rects[HWND_DMABUF_MAX_DIRTY_RECTS][4];
+    unsigned __int64 modifier;
+    unsigned __int64 producer_unique_id;
+    unsigned __int64 sync_timeline_point;
+    unsigned __int64 release_token;
+    unsigned int     dxgi_format;
+    unsigned int     alpha_mode;
+    unsigned int     color_space;
+    unsigned int     hdr_metadata_type;
+    hwnd_dmabuf_hdr_metadata_hdr10_t hdr_metadata;
+
+    unsigned int     plane_count;
+    unsigned int     plane_offsets[HWND_DMABUF_MAX_PLANES];
+    unsigned int     plane_strides[HWND_DMABUF_MAX_PLANES];
+} hwnd_dmabuf_frame_desc_t;
+
+typedef struct
+{
+    user_handle_t hwnd;
+    user_handle_t host_hwnd;
+    struct rectangle window;
+    struct rectangle client;
+    unsigned int style;
+    unsigned int ex_style;
+    unsigned int dpi;
+    unsigned int frame_seq;
+    unsigned int opened;
+} hwnd_dmabuf_frame_info_t;
 
 
 struct async_data
@@ -1126,8 +1223,8 @@ struct new_thread_request
     unsigned int access;
     unsigned int flags;
     int          request_fd;
+    int          is_system;
     /* VARARG(objattr,object_attributes); */
-    char __pad_28[4];
 };
 struct new_thread_reply
 {
@@ -1631,8 +1728,9 @@ struct select_reply
     /* VARARG(call,apc_call); */
     /* VARARG(contexts,contexts); */
 };
-#define SELECT_ALERTABLE     1
-#define SELECT_INTERRUPTIBLE 2
+#define SELECT_ALERTABLE           1
+#define SELECT_INTERRUPTIBLE       2
+#define SELECT_COOPERATIVE_SUSPEND 4
 
 
 
@@ -2228,10 +2326,13 @@ struct get_mapping_info_reply
     unsigned int flags;
     obj_handle_t shared_file;
     data_size_t  name_len;
+    data_size_t  ver_len;
     data_size_t  total;
     /* VARARG(image,pe_image_info); */
+    /* VARARG(version,version_res,ver_len); */
     /* VARARG(name,unicode_str,name_len); */
     /* VARARG(exp_name,string); */
+    char __pad_36[4];
 };
 
 
@@ -3724,6 +3825,23 @@ struct get_window_children_from_point_reply
 };
 
 
+struct get_window_from_point_request
+{
+    struct request_header __header;
+    user_handle_t  parent;
+    int            x;
+    int            y;
+    int            dpi;
+    char __pad_28[4];
+};
+struct get_window_from_point_reply
+{
+    struct reply_header __header;
+    user_handle_t  handle;
+    unsigned int   style;
+};
+
+
 
 struct get_window_tree_request
 {
@@ -3768,6 +3886,7 @@ struct set_window_pos_reply
 #define SET_WINPOS_PAINT_SURFACE    0x01
 #define SET_WINPOS_PIXEL_FORMAT     0x02
 #define SET_WINPOS_LAYERED_WINDOW   0x04
+#define SET_WINPOS_CLIP_CLIENT      0x08
 
 
 struct get_window_rectangles_request
@@ -3782,6 +3901,8 @@ struct get_window_rectangles_reply
     struct reply_header __header;
     struct rectangle window;
     struct rectangle client;
+    unsigned int     style;
+    char __pad_44[4];
 };
 enum coords_relative
 {
@@ -3890,7 +4011,6 @@ struct set_window_region_reply
 {
     struct reply_header __header;
 };
-
 
 
 struct get_update_region_request
@@ -4330,6 +4450,8 @@ struct set_user_input_time_request
 {
     struct request_header __header;
     int          set;
+    user_handle_t forward;
+    char __pad_20[4];
 };
 struct set_user_input_time_reply
 {
@@ -5369,6 +5491,40 @@ struct create_device_manager_reply
 
 
 
+struct set_sony_active_controller_request
+{
+    struct request_header __header;
+    unsigned int container0;
+    unsigned int container1;
+    unsigned int container2;
+    unsigned int container3;
+    int          valid;
+};
+struct set_sony_active_controller_reply
+{
+    struct reply_header __header;
+};
+
+
+
+struct get_sony_active_controller_request
+{
+    struct request_header __header;
+    char __pad_12[4];
+};
+struct get_sony_active_controller_reply
+{
+    struct reply_header __header;
+    unsigned int container0;
+    unsigned int container1;
+    unsigned int container2;
+    unsigned int container3;
+    int          valid;
+    char __pad_28[4];
+};
+
+
+
 struct create_device_request
 {
     struct request_header __header;
@@ -6286,6 +6442,99 @@ struct fsync_free_shm_idx_reply
 };
 
 
+
+struct hwnd_list_dmabuf_frames_request
+{
+    struct request_header __header;
+    user_handle_t  host_hwnd;
+};
+struct hwnd_list_dmabuf_frames_reply
+{
+    struct reply_header __header;
+    unsigned int   status;
+    unsigned int   count;
+    /* VARARG(frames,bytes); */
+};
+
+
+
+struct hwnd_dmabuf_set_pending_request
+{
+    struct request_header __header;
+    user_handle_t  hwnd;
+    unsigned int   pending;
+    char __pad_20[4];
+};
+struct hwnd_dmabuf_set_pending_reply
+{
+    struct reply_header __header;
+    unsigned int   status;
+    char __pad_12[4];
+};
+
+
+
+struct hwnd_dmabuf_get_channel_request
+{
+    struct request_header __header;
+    user_handle_t  hwnd;
+    unsigned int   flags;
+    char __pad_20[4];
+};
+struct hwnd_dmabuf_get_channel_reply
+{
+    struct reply_header __header;
+    unsigned int   status;
+    obj_handle_t   channel_handle;
+};
+
+
+
+struct hwnd_dmabuf_get_channel_exclusive_request
+{
+    struct request_header __header;
+    user_handle_t  hwnd;
+};
+struct hwnd_dmabuf_get_channel_exclusive_reply
+{
+    struct reply_header __header;
+    unsigned int   status;
+    obj_handle_t   channel_handle;
+};
+
+
+
+struct hwnd_dmabuf_claim_channel_request
+{
+    struct request_header __header;
+    user_handle_t  hwnd;
+    unsigned int   flags;
+    char __pad_20[4];
+};
+struct hwnd_dmabuf_claim_channel_reply
+{
+    struct reply_header __header;
+    unsigned int   status;
+    obj_handle_t   channel_handle;
+};
+
+
+
+struct hwnd_dmabuf_release_channel_request
+{
+    struct request_header __header;
+    user_handle_t  hwnd;
+    unsigned int   flags;
+    char __pad_20[4];
+};
+struct hwnd_dmabuf_release_channel_reply
+{
+    struct reply_header __header;
+    unsigned int   status;
+    char __pad_12[4];
+};
+
+
 enum request
 {
     REQ_new_process,
@@ -6444,6 +6693,7 @@ enum request
     REQ_get_window_list,
     REQ_get_class_windows,
     REQ_get_window_children_from_point,
+    REQ_get_window_from_point,
     REQ_get_window_tree,
     REQ_set_window_pos,
     REQ_get_window_rectangles,
@@ -6544,6 +6794,8 @@ enum request
     REQ_get_object_types,
     REQ_allocate_locally_unique_id,
     REQ_create_device_manager,
+    REQ_set_sony_active_controller,
+    REQ_get_sony_active_controller,
     REQ_create_device,
     REQ_delete_device,
     REQ_get_next_device_request,
@@ -6600,6 +6852,12 @@ enum request
     REQ_d3dkmt_mutex_acquire,
     REQ_d3dkmt_mutex_release,
     REQ_fsync_free_shm_idx,
+    REQ_hwnd_list_dmabuf_frames,
+    REQ_hwnd_dmabuf_set_pending,
+    REQ_hwnd_dmabuf_get_channel,
+    REQ_hwnd_dmabuf_get_channel_exclusive,
+    REQ_hwnd_dmabuf_claim_channel,
+    REQ_hwnd_dmabuf_release_channel,
     REQ_NB_REQUESTS
 };
 
@@ -6763,6 +7021,7 @@ union generic_request
     struct get_window_list_request get_window_list_request;
     struct get_class_windows_request get_class_windows_request;
     struct get_window_children_from_point_request get_window_children_from_point_request;
+    struct get_window_from_point_request get_window_from_point_request;
     struct get_window_tree_request get_window_tree_request;
     struct set_window_pos_request set_window_pos_request;
     struct get_window_rectangles_request get_window_rectangles_request;
@@ -6863,6 +7122,8 @@ union generic_request
     struct get_object_types_request get_object_types_request;
     struct allocate_locally_unique_id_request allocate_locally_unique_id_request;
     struct create_device_manager_request create_device_manager_request;
+    struct set_sony_active_controller_request set_sony_active_controller_request;
+    struct get_sony_active_controller_request get_sony_active_controller_request;
     struct create_device_request create_device_request;
     struct delete_device_request delete_device_request;
     struct get_next_device_request_request get_next_device_request_request;
@@ -6919,6 +7180,12 @@ union generic_request
     struct d3dkmt_mutex_acquire_request d3dkmt_mutex_acquire_request;
     struct d3dkmt_mutex_release_request d3dkmt_mutex_release_request;
     struct fsync_free_shm_idx_request fsync_free_shm_idx_request;
+    struct hwnd_list_dmabuf_frames_request hwnd_list_dmabuf_frames_request;
+    struct hwnd_dmabuf_set_pending_request hwnd_dmabuf_set_pending_request;
+    struct hwnd_dmabuf_get_channel_request hwnd_dmabuf_get_channel_request;
+    struct hwnd_dmabuf_get_channel_exclusive_request hwnd_dmabuf_get_channel_exclusive_request;
+    struct hwnd_dmabuf_claim_channel_request hwnd_dmabuf_claim_channel_request;
+    struct hwnd_dmabuf_release_channel_request hwnd_dmabuf_release_channel_request;
 };
 union generic_reply
 {
@@ -7080,6 +7347,7 @@ union generic_reply
     struct get_window_list_reply get_window_list_reply;
     struct get_class_windows_reply get_class_windows_reply;
     struct get_window_children_from_point_reply get_window_children_from_point_reply;
+    struct get_window_from_point_reply get_window_from_point_reply;
     struct get_window_tree_reply get_window_tree_reply;
     struct set_window_pos_reply set_window_pos_reply;
     struct get_window_rectangles_reply get_window_rectangles_reply;
@@ -7180,6 +7448,8 @@ union generic_reply
     struct get_object_types_reply get_object_types_reply;
     struct allocate_locally_unique_id_reply allocate_locally_unique_id_reply;
     struct create_device_manager_reply create_device_manager_reply;
+    struct set_sony_active_controller_reply set_sony_active_controller_reply;
+    struct get_sony_active_controller_reply get_sony_active_controller_reply;
     struct create_device_reply create_device_reply;
     struct delete_device_reply delete_device_reply;
     struct get_next_device_request_reply get_next_device_request_reply;
@@ -7236,8 +7506,14 @@ union generic_reply
     struct d3dkmt_mutex_acquire_reply d3dkmt_mutex_acquire_reply;
     struct d3dkmt_mutex_release_reply d3dkmt_mutex_release_reply;
     struct fsync_free_shm_idx_reply fsync_free_shm_idx_reply;
+    struct hwnd_list_dmabuf_frames_reply hwnd_list_dmabuf_frames_reply;
+    struct hwnd_dmabuf_set_pending_reply hwnd_dmabuf_set_pending_reply;
+    struct hwnd_dmabuf_get_channel_reply hwnd_dmabuf_get_channel_reply;
+    struct hwnd_dmabuf_get_channel_exclusive_reply hwnd_dmabuf_get_channel_exclusive_reply;
+    struct hwnd_dmabuf_claim_channel_reply hwnd_dmabuf_claim_channel_reply;
+    struct hwnd_dmabuf_release_channel_reply hwnd_dmabuf_release_channel_reply;
 };
 
-#define SERVER_PROTOCOL_VERSION 931
+#define SERVER_PROTOCOL_VERSION 938
 
 #endif /* __WINE_WINE_SERVER_PROTOCOL_H */
