@@ -48,7 +48,7 @@ To use this project on NixOS or by using the nix package manager, follow the fol
 
     ```nix
     inputs.spout2pw = {
-      url = "git+https://github.com/tasokait/spout2pw.git?ref=refs/tags/v0.4.5";
+      url = "git+https://github.com/tasokait/spout2pw.git?ref=v0.4.x";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     ```
