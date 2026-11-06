@@ -1,0 +1,14 @@
+diff --git a/misc/spout2pw.sh b/misc/spout2pw.sh
+index 8e2929a..82a48ee 100755
+--- a/misc/spout2pw.sh
++++ b/misc/spout2pw.sh
+@@ -255,7 +255,8 @@ setup_umu() {
+         PROTONPATH="$protonpath" "$umu" "$@"
+     }
+
+-    wine_server=("/usr/bin/env" "WINEPREFIX=$wineprefix" "$protonpath/files/bin/wineserver")
++    # run wineserver inside steam runtime
++    wine_server=("/usr/bin/env" "WINEPREFIX=$wineprefix" "UMU_NO_PROTON=1" "$umu" "$protonpath/files/bin/wineserver")
+ }
+
+ setup_steam() {

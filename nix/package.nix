@@ -75,6 +75,7 @@ stdenv.mkDerivation (finalAttrs: {
     ./0002-spout2pw-path.patch
     ./0003-spout2pw-usage.patch
     ./0004-tools-package.patch
+    ./0005-umu-wineserver.patch
   ];
 
   postPatch = ''

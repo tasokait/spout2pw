@@ -78,10 +78,6 @@ check_environment() {
     home="$(realpath "$home")"
 }
 
-wine_server() {
-    WINEPREFIX="$wineprefix" "$protonpath/files/bin/wineserver" "$@"
-}
-
 verchk() {
     oldest=$(printf '%s\n' "$2" "$1" | sort -V | head -n1)
     log "  Version check: $1 >= $2, oldest: $oldest"
@@ -258,6 +254,8 @@ setup_umu() {
         WINEPREFIX="$wineprefix" \
         PROTONPATH="$protonpath" "$umu" "$@"
     }
+
+    wine_server=("/usr/bin/env" "WINEPREFIX=$wineprefix" "$protonpath/files/bin/wineserver")
 }
 
 setup_steam() {
@@ -299,6 +297,8 @@ setup_steam() {
         log "run_in_prefix: $@"
         "${launch_cmd[@]}" run "$@"
     }
+
+    wine_server=("/usr/bin/env" "WINEPREFIX=$wineprefix" "$protonpath/files/bin/wineserver")
 
     if [ -z "$SPOUT2PW_INSTANCE" ]; then
         if [ ! -z "$STEAM_COMPAT_INSTALL_PATH" ]; then
@@ -410,8 +410,9 @@ prepare_prefix() {
     done
 
     log "Trying to stop any running wineserver for this prefix"
-    wine_server -k 2>/dev/null || true
-    wine_server -w 2>/dev/null || true
+
+    "${wine_server[@]}" -k 2>/dev/null || true
+    "${wine_server[@]}" -w 2>/dev/null || true
 
     # Copy the real spout2pw.exe executable and the builtin spout2pw.dll to system32 first.
     # The INF's rundll32 setupapi call hangs if the prefix isn't fully initialized,
@@ -425,7 +426,7 @@ prepare_prefix() {
 
     # waiting for wineserver to exit, which guarantees system.reg is written to disk
     wine_ok=0
-    timeout 30 "$protonpath/files/bin/wineserver" -w || wine_ok=$?
+    timeout 30 "${wine_server[@]}" -w || wine_ok=$?
 
     # Wine can return from setupapi before its registry files are flushed.
     # Wait briefly for the existing on-disk verification to observe the service.
