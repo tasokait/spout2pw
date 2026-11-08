@@ -2,7 +2,7 @@
 
 **[Spout2PW website](https://spout2pw.lina.yt)**
 
-[![buy me a coffee](https://img.shields.io/badge/buy_me_a-coffee-orange)](https://buymeacoffee.com/kaitsukita)
+[![buy me a coffee](https://img.shields.io/badge/buy_me_a-coffee-orange)](https://buymeacoffee.com/kaitsukitai)
 
 **If you like this, please help support me with the links above!**
 
