@@ -261,6 +261,8 @@ setup_umu() {
 setup_steam() {
     wineprefix="$STEAM_COMPAT_DATA_PATH/pfx"
     protonpath="$(echo "$STEAM_COMPAT_TOOL_PATHS" | cut -d: -f1)"
+    protonpath="${protonpath#/run/host}"
+    #some kernels report /run/host leading for it which leads to nowhere
 
     set | grep '^STEAM' | while read a; do
         log "$a"
