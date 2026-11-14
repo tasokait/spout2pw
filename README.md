@@ -37,6 +37,9 @@ Contributors:
 * marysaka
 * yofukashino
 * h-banii
+* liquidnya
+* Rk7gamerYT
+* konsti219
 
 ## NixOS
 
