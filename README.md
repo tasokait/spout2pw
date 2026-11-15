@@ -40,6 +40,7 @@ Contributors:
 * liquidnya
 * Rk7gamerYT
 * konsti219
+* madalee_m
 
 ## NixOS
 
